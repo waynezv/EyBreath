@@ -1,4 +1,4 @@
-project(speaker_identification)
+project(SPEAKER_ID)
 cmake_minimum_required(VERSION 2.8 FATAL_ERROR)
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
@@ -26,6 +26,6 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 FIND_PACKAGE(Threads REQUIRED)
 set(LIBS ${LIBS} ${CMAKE_THREAD_LIBS_INIT})
 
-add_executable(speaker_identification speaker_identification.cc)
-target_link_libraries(speaker_identification dynet ${LIBS})
+add_executable(speaker_id speaker_id.cc)
+target_link_libraries(speaker_id dynet ${LIBS})
 enable_testing()
