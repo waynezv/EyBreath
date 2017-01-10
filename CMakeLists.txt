@@ -26,6 +26,9 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 FIND_PACKAGE(Threads REQUIRED)
 set(LIBS ${LIBS} ${CMAKE_THREAD_LIBS_INIT})
 
+# CQT
+include_directories("./cq-v1.1")
+
 add_executable(speaker_id speaker_id.cc)
 target_link_libraries(speaker_id dynet ${LIBS})
 enable_testing()

@@ -1,3 +1,6 @@
+"""
+Data preparation for multitask learning acoustical embeddings.
+"""
 from __future__ import print_function
 import os
 import sys
@@ -7,6 +10,7 @@ import constants
 
 instance_dict = dict()
 speaker_dict = dict()
+
 class Instance(object):
     def __init__(self, file_id, speaker_id, featvec, num_frames):
         self.file_id = file_id
@@ -41,9 +45,9 @@ def read_instance(data_path, filename, pad_size, instance_save_dir):
                 featvec.append(rstl.strip().split()[1:41]) # strip first number
             featvec = pad_vec(pad_size, featvec) # padding
             featvec = np.asarray(featvec, dtype=float)
-            instance_dict[speaker_id] = Instance(file, speaker_id, featvec, num_frames)
+            instance_dict[i] = Instance(file, speaker_id, featvec, num_frames)
     # write_dict(speaker_dict, ''.join([filename, '_speaker_dict.txt']))
-    # write_instance(instance_dict, instance_save_dir)
+    write_instance(instance_dict, instance_save_dir)
     print('processed ', filename, ', total ', num_files, ' files')
     print('total ', len(speaker_dict), ' speakers')
     print('max frame number ', max_frames)
@@ -60,7 +64,7 @@ def pad_vec(max_frames, vec):
 def write_instance(instance_dict, path):
     for k in instance_dict:
         data = ''
-        data += str(k) + '\n' + str(instance_dict[k].num_frames) + '\n'
+        data += str(instance_dict[k].speaker_id) + '\n' + str(instance_dict[k].num_frames) + '\n'
         for l in instance_dict[k].featvec:
             data += str(l).strip() + '\n'
         with open(''.join([path, str(k), '.txt']), 'w') as f:
@@ -74,7 +78,6 @@ def write_dict(speaker_dict, filename):
         f.write(out)
 
 
-
 if __name__ == '__main__':
-    # read_instance(constants.DATA_PATH1, constants.EY_FILE_LIST, constants.MAX_FRAMES1, 'featvec_ey/')
-    # read_instance(constants.DATA_PATH2, constants.BREATH_FILE_LIST, constants.MAX_FRAMES2, 'featvec_breath/')
+    # read_instance(constants.DATA_PATH1, constants.EY_FILE_LIST, constants.MAX_FRAMES1, './feat_logspec/ey/')
+    read_instance(constants.DATA_PATH2, constants.BREATH_FILE_LIST, constants.MAX_FRAMES2, './feat_logspec/breath/')
