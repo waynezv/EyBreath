@@ -16,14 +16,19 @@ using namespace dynet::expr;
 
 unsigned NUM_FRAMES        = 55;
 unsigned FEAT_DIM          = 40;
+
 unsigned NUM_FILTERS_CONV1 = 10;
 unsigned FILTER_SIZE_CONV1 = 9;
 unsigned ROWS1             = 40;
+
 unsigned NUM_FILTERS_CONV2 = 5;
 unsigned FILTER_SIZE_CONV2 = 5;
 unsigned ROWS2             = 20;
-unsigned EMBEDDING_SIZE    = 1024;
+
 unsigned CONV_OUTPUT_DIM   = 400;
+
+unsigned EMBEDDING_SIZE    = 1024;
+
 unsigned NUM_SPEAKERS      = 623;
 unsigned K_1               = 36;
 
@@ -103,7 +108,7 @@ struct NetBuilder {
             }
         }
 
-    Expression get_loss(ComputationGraph& cg, Instance instance) {
+    pair<Expression, Expression> get_loss(ComputationGraph& cg, Instance instance) {
         Expression raw_input = input(cg, {NUM_FRAMES, 40}, instance.feat_vec);
         Expression inp = transpose(raw_input);
 
@@ -127,18 +132,20 @@ struct NetBuilder {
 
         Expression loss = pickneglogsoftmax(output, instance.speaker_id);
 
-        return loss;
+        return make_pair(output, loss);
     }
 };
 
 
 int main(int argc, char** argv) {
     dynet::initialize(argc, argv, 3640753077);
-    vector<Instance> instances = read_instances("../featvec_ey/", "../featvec_ey.list");
+    // vector<Instance> instances = read_instances("../feat_logspec/ey/", "../featvec_ey.list");
+    vector<Instance> instances = read_instances("../feat_logspec/breath/", "../featvec_breath.list");
 
     Model model;
     NetBuilder network(&model);
-    SimpleSGDTrainer sgd(&model);
+    // SimpleSGDTrainer sgd(&model);
+    AdagradTrainer adagrad(&model, 0.01, 1e-20, 0.1);
 
     vector<int> torder;
     for (int i = 0; i < instances.size(); ++i) {
@@ -146,11 +153,12 @@ int main(int argc, char** argv) {
     }
     random_shuffle(torder.begin(), torder.end());
 
-    int dev_size = 2;
+    int dev_size = 20;
     vector<int> dev(&torder[torder.size()-dev_size], &torder[torder.size()]);
     vector<int> order(&torder[0], &torder[torder.size()-dev_size]);
     int train_update_every_n           = 300;
-    int dev_update_every_n             = 600;
+    int dev_update_every_n             = 400;
+    float miss_pred_count_train        = 0;
     float total_loss                   = 0;
     float total_loss_since_last_update = 0;
     float best_loss                    = 1000000;
@@ -173,17 +181,26 @@ int main(int argc, char** argv) {
         //test each task on each instance in the dev set
         float dev_loss = 0;
         float num_tests = 0;
+        float miss_pred_count = 0;
         for (int j = 0; j < dev.size(); ++j) {
             ComputationGraph cg;
             Instance instance = instances[dev[j]];
 
-            Expression loss = network.get_loss(cg, instance);
+            pair<Expression, Expression> resul = network.get_loss(cg, instance);
+            Expression loss = resul.second;
+            Expression label = resul.first;
+
             float lp = as_scalar(cg.incremental_forward(loss));
+            vector<float> op = as_vector(cg.incremental_forward(label));
+            int label_pred = distance(op.begin(), max_element(op.begin(), op.end()));
+            if (label_pred != instance.speaker_id) {miss_pred_count ++;}
+            // cerr << "dev output: " << label_pred << "label: " << instance.speaker_id << endl;
             dev_loss += lp;
             num_tests += 1;
         }
         cerr << "Iter: " << iter << " dev update: avg loss per instance : "
-            << dev_loss/num_tests << endl;
+            << dev_loss/num_tests
+            << " dev err rate : " << miss_pred_count/num_tests << endl;
 
         // Save model
         // if (dev_loss < best_loss) {
@@ -199,17 +216,26 @@ int main(int argc, char** argv) {
       ComputationGraph cg;
       Instance instance = instances[order[i]];
 
-      Expression loss = network.get_loss(cg, instance);
+      pair<Expression, Expression> resul = network.get_loss(cg, instance);
+      Expression loss = resul.second;
+      Expression label = resul.first;
 
       float lp = as_scalar(cg.incremental_forward(loss));
+      vector<float> op = as_vector(cg.incremental_forward(label));
+      int label_pred = distance(op.begin(), max_element(op.begin(), op.end()));
+      // cerr << "train output: " << label_pred << "label: " << instance.speaker_id << endl;
+      if (label_pred != instance.speaker_id) {miss_pred_count_train ++;}
       total_loss += lp;
       total_loss_since_last_update += lp;
       cg.backward(loss);
-      sgd.update(0.001);
+      // sgd.update(0.001);
+      adagrad.update();
 
       if ( (i % train_update_every_n) == (train_update_every_n - 1) ) {
-        cerr << "Iter: " << iter << " through " << i << " instances out of "  << instances.size() <<
-            " total, avg loss since last update: " << total_loss_since_last_update/train_update_every_n << endl;
+        cerr << "Iter: " << iter << " through " << i << " instances out of "  << instances.size()
+            << " total, avg loss since last update: " << total_loss_since_last_update/train_update_every_n
+            << " train err rate : " << miss_pred_count_train/train_update_every_n << endl;
+        miss_pred_count_train = 0;
         total_loss_since_last_update = 0;
       }
     }

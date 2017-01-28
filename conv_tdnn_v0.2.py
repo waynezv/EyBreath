@@ -7,351 +7,22 @@ import os
 import time
 import re
 from collections import OrderedDict
+import six.moves.cPickle as pickle
 
 import numpy as np
-
 import theano as T
 import theano.tensor as tensor
-from theano.tensor.nnet import conv2d
-from theano.tensor.signal import pool
 from theano import config
-from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-
-from keras import backend as K
-from keras.models import Sequential
-from keras.layers import Activation, Dense, Convolution2D, \
-    MaxPooling2D, AveragePooling1D, ZeroPadding2D, Dropout, \
-    Flatten, LSTM, Input, Reshape
-from keras.optimizers import SGD
-from keras.callbacks import EarlyStopping
 
 import eybreath_data_prepare as edp
 
+from w_net import LSTMBuilder, ConvolutionBuilder, DenseBuilder,\
+    ActivationBuilder, PoolBuilder, ReshapeBuilder,\
+    DropoutBuilder,\
+    get_cost, pred_class,\
+    sgd, rmsprop, adadelta
+
 DEBUG_OUTPUT = 0
-
-# Set the random number generator's seed for consistency
-SEED = 93492019
-rng = np.random.RandomState(SEED)
-
-"""
-Keras model related.
-"""
-class NetBuilder:
-    """
-    Net builder with Keras.
-    """
-    def __init__(self, inp, lbl):
-        nrow, ncol = inp.shape
-        nout = lbl.shape[0]
-        inp = inp.reshape((1, 1, nrow, ncol))
-        lbl = lbl.reshape((1, nout))
-        self.input = inp
-        self.output = lbl
-
-        self.model = Sequential()
-        self.model.add(Convolution2D(
-            10, nrow, 1,
-            input_shape = (1, nrow, ncol),
-            subsample = (1, 1)
-        )
-                       )
-        self.model.add(Activation('relu'))
-        self.model.add(Reshape((10, ncol)))
-        self.model.add(LSTM(100))
-        #self.model.add(AveragePooling1D(pool_length=2))
-        self.model.add(Dense(nout))
-        self.model.add(Activation('softmax'))
-
-    def trainer(self, nepoch):
-        self.model.compile(
-            loss = 'categorical_crossentropy',
-            optimizer = 'adam',
-            metrics = ['accuracy']
-        )
-        if DEBUG_OUTPUT:
-            print(self.model.layers[0].output_shape)
-            print(self.model.layers[1].output_shape)
-            print(self.model.layers[2].output_shape)
-            print(self.model.layers[3].output_shape)
-            print(self.model.layers[4].output_shape)
-            print(self.model.layers[5].output_shape)
-
-        hist = self.model.fit(
-            self.input, self.output,
-            nb_epoch = nepoch
-        )
-
-    def tester(self, x, y):
-        nr, nc = x.shape
-        no = y.shape[0]
-        x = x.reshape((1, 1, nr, nc))
-        y = y.reshape((1, no))
-        eval = self.model.evaluate(x, y)
-
-    def saver(self):
-        pass
-
-"""
-Net related.
-"""
-def ortho_weight(ndim):
-    W = np.random.randn(ndim, ndim)
-    u, s, v = np.linalg.svd(W)
-    return u.astype(config.floatX)
-
-class LSTMBuilder:
-    """
-    Net builder for LSTM.
-    """
-    def __init__(self, inp, prefix, rand_scheme = 'standnormal'):
-        """
-        :inp: (num_time_steps, num_samples, num_embedding_size)
-
-        TODO:
-        1. Batch & mask
-        2. Output dim
-        """
-
-        n_tstep, n_samp, embd_size = inp.shape[0], inp.shape[1], inp.shape[2]
-        embd_size = 15
-        self.n_tstep = n_tstep
-        self.n_samp = n_samp
-        self.embd_size = embd_size
-
-        W_val = np.concatenate([ortho_weight(embd_size),
-                            ortho_weight(embd_size),
-                            ortho_weight(embd_size),
-                            ortho_weight(embd_size)], axis=1)
-        W = T.shared(value = W_val, name = prefix + '_W', borrow = True)
-        U_val = np.concatenate([ortho_weight(embd_size),
-                            ortho_weight(embd_size),
-                            ortho_weight(embd_size),
-                            ortho_weight(embd_size)], axis=1)
-        U = T.shared(value = U_val, name = prefix + '_U', borrow = True)
-        b_val = np.zeros((4 * embd_size,), dtype = config.floatX)
-        b = T.shared(value = b_val, name = prefix + '_b', borrow = True)
-
-        self.input = inp
-        self.W = W
-        self.U = U
-        self.b = b
-
-        # Parallelize: process one batch: n_samp per n_tstep.
-        self.inp_t = tensor.dot(self.input, self.W) + self.b
-        '''
-        rval, updates = T.scan(self._step,
-                               sequences    = self.inp_t,
-                               outputs_info = [
-                                   tensor.zeros_like(self.inp_t),
-                                   tensor.zeros_like(self.inp_t)
-                                   ],
-                               name = prefix + '_layers',
-                               n_steps = n_tstep)
-        '''
-
-        rval, updates = T.scan(self._step,
-                               sequences    = self.inp_t,
-                               outputs_info = [
-                                   tensor.alloc(
-                                       np.asarray(0., dtype = config.floatX),
-                                       n_samp,
-                                       embd_size
-                                       ),
-                                   tensor.alloc(
-                                       np.asarray(0., dtype = config.floatX),
-                                       n_samp,
-                                       embd_size
-                                       )
-                                   ],
-                               name = prefix + '_layers',
-                               n_steps = n_tstep)
-
-        self.output = rval[0] # h: (n_tstep, n_samp, embd_size)
-
-        self.f = T.function([inp], self.output, name = 'f_' + prefix)
-        self.params = [self.W, self.U, self.b]
-
-    def _step(self, x_, h_, c_):
-        """
-        :x_: W * x_t
-        :h_: h_(t-1)
-        :c_: c_(t-1)
-        """
-        preact = x_ + tensor.dot(h_, self.U)
-
-        # Gates, outputs, states
-        i = tensor.nnet.sigmoid(self._slice(preact, 0, self.embd_size))
-        f = tensor.nnet.sigmoid(self._slice(preact, 1, self.embd_size))
-        o = tensor.nnet.sigmoid(self._slice(preact, 2, self.embd_size))
-        c = tensor.tanh(self._slice(preact, 3, self.embd_size))
-
-        # States update
-        c = f * c_ + i * c
-
-        # Hidden updat
-        h = o * tensor.tanh(c)
-
-        return h, c
-
-    def _slice(self, _x, n, dim):
-        if _x.ndim == 3:
-            return _x[:, :, n * dim:(n + 1) * dim]
-        return _x[:, n * dim:(n + 1) * dim]
-
-class DenseBuilder:
-    """
-    Net builder for Dense layer.
-    """
-    def __init__(self, inp, in_dim, out_dim, prefix,
-                 W = None, b = None, rand_scheme = 'standnormal'):
-        n_samp, m = inp.shape[0], inp.shape[1]
-
-        if W == None:
-            if rand_scheme == 'uniform':
-                W_val = np.asarray(
-                    rng.uniform(
-                        low  = -np.sqrt(6. / (m + out_dim)),
-                        high =  np.sqrt(6. / (m + out_dim)),
-                        size = (m, out_dim)
-                    ),
-                    dtype = config.floatX
-                )
-            elif rand_scheme == 'standnormal':
-                W_val = np.asarray(
-                    rng.randn(in_dim, out_dim),
-                    dtype = config.floatX
-                )
-            elif rand_scheme == 'orthogonal':
-                pass
-            elif rand_scheme == 'identity':
-                pass
-            W = T.shared(value = W_val, name = prefix + '_W', borrow = True)
-
-        if b == None:
-            b_val = np.zeros((out_dim,), dtype = config.floatX)
-            b = T.shared(value = b_val, name = prefix + '_b', borrow = True)
-
-        self.input = inp
-        self.W = W
-        self.b = b
-        self.output = tensor.dot(self.input, W) + b
-
-        self.f = T.function([inp], self.output, name = 'f_' + prefix)
-        self.params = [self.W, self.b]
-
-
-class ConvolutionBuilder:
-    """
-    Net builder for Convolution layer.
-    """
-    def __init__(self, inp, filter_shape, prefix, stride = (1, 1),
-            W = None, b = None, rand_scheme = 'standnormal'):
-        n_samp, n_ch, n_row, n_col = inp.shape[0], inp.shape[1], inp.shape[2], inp.shape[3]
-        n_filt, n_in_featmap, filt_hgt, filt_wdh = filter_shape
-
-        if W == None:
-            if rand_scheme == 'uniform':
-                fan_in = n_in_featmap * filt_hgt * filt_wdh
-                fan_out = n_filt * filt_hgt * filt_wdh // np.prod(stride)
-                W_bound = np.sqrt(6. / (fan_in + fan_out))
-                W_val = np.asarray(
-                    rng.uniform(
-                        low  = -W_bound,
-                        high = W_bound,
-                        size = filter_shape
-                    ),
-                    dtype = config.floatX
-                )
-            elif rand_scheme == 'standnormal':
-                W_val = np.asarray(
-                    rng.randn(n_filt, n_in_featmap, filt_hgt, filt_wdh),
-                    dtype = config.floatX
-                )
-            elif rand_scheme == 'orthogonal':
-                pass
-            elif rand_scheme == 'identity':
-                pass
-            W = T.shared(value = W_val, name = prefix + '_W', borrow = True)
-
-        if b == None:
-            b_val = np.zeros((n_filt,), dtype = config.floatX)
-            b = T.shared(value = b_val, name = prefix + '_b', borrow = True)
-
-        self.input = inp
-        self.W = W
-        self.b = b
-        self.output = conv2d(input = inp, filters = self.W, filter_shape = filter_shape,
-                          subsample = stride) + self.b.dimshuffle('x', 0, 'x', 'x')
-
-        self.f = T.function([inp], self.output, name = 'f_' + prefix)
-        self.params = [self.W, self.b]
-
-
-class PoolBuilder:
-    """
-    Net builder for pool layer.
-    """
-    def __init__(self, inp, pool_scheme):
-        a = inp.shape[0]
-        b = inp.shape[1]
-        c = inp.shape[2]
-        d = inp.shape[3]
-        if pool_scheme == 'max':
-            pass
-        elif pool_scheme == 'mean':
-            n_tstep = inp.shape[0].astype(config.floatX)
-            self.output = inp.sum(axis=0) / n_tstep
-        elif pool_scheme == 'random':
-            pass
-
-        self.f = T.function([inp], self.output, name = 'f_' + pool_scheme)
-
-
-class ReshapeBuilder:
-    def __init__(self, inp, reshape):
-        a = inp.shape[0]
-        b = inp.shape[1]
-        c = inp.shape[2]
-        d = inp.shape[3]
-        #self.output  = inp.reshape((a, b, d)).dimshuffle(reshape)
-        self.output  = inp.reshape((d, a, b))
-        self.f = T.function([inp], self.output, name = 'f_reshape')
-
-
-class ActivationBuilder:
-    """
-    Net builder for Activation layer.
-    """
-    def __init__(self, inp, activation):
-        if activation == 'relu':
-            self.output = tensor.nnet.relu(inp)
-        elif activation == 'softmax':
-            self.output = tensor.nnet.softmax(inp)
-        elif activation == 'tanh':
-            self.output = tensor.nnet.sigmoid(inp)
-        elif activation == 'sigmoid':
-            self.output = tensor.tanh(inp)
-
-        self.f = T.function([inp], self.output, name = 'f_' + activation)
-
-
-def get_cost(pred_prob, y):
-    if pred_prob.ndim == 2:
-        n_samp = pred_prob.shape[0]
-    else:
-        n_samp = 1
-
-    off = 1e-8
-    if pred_prob.dtype == 'float16':
-        off = 1e-6
-
-    cost = -tensor.log(pred_prob[tensor.arange(n_samp), y] + off).mean()
-    return cost
-
-def pred_class(pred_prob):
-    if pred_prob.ndim == 2:
-        return np.argmax(pred_prob, axis=1)
-    return np.argmax(pred_prob)
 
 model = OrderedDict() # dict: layer_name (string) -> layer (func)
 
@@ -359,148 +30,174 @@ def get_layer(layer_name):
     l = model[layer_name]
     return l
 
-def build_model(time_encoder = 'lstm'):
-    x = tensor.tensor4('x', dtype = config.floatX)
-    y = tensor.scalar('y', dtype = 'int32')
+def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
+    """
+    :params: list of params, empty or reloaded from saved model
+    """
 
+    print('Using encoder: ', time_encoder)
+    if params: # not empty
+        if time_encoder == 'lstm':
+            W_embd  = params[0]
+            b_embd  = params[1]
+            #W_conv  =
+            #b_conv  =
+            W_lstm  = params[2]
+            U_lstm  = params[3]
+            b_lstm  = params[4]
+            W_dense = params[5]
+            b_dense = params[6]
+            #W_dense2 = params[7]
+            #b_dense2 = params[8]
+        elif time_encoder == 'tdnn':
+            W_embd  = params[0]
+            b_embd  = params[1]
+            W_tdnn  = params[2]
+            b_tdnn  = params[3]
+            W_dense = params[4]
+            b_dense = params[5]
+            #W_dense2 = params[6]
+            #b_dense2 = params[7]
+        print('Params from previously saved model loaded successfully!.')
+    else:
+            W_embd  = None
+            b_embd  = None
+            W_conv  = None
+            b_conv  = None
+            W_tdnn  = None
+            b_tdnn  = None
+            W_lstm  = None
+            U_lstm  = None
+            b_lstm  = None
+            W_dense = None
+            b_dense = None
+            #W_dense2 = None
+            #b_dense2 = None
+
+    x = tensor.tensor4('x', dtype=config.floatX)
+    y = tensor.scalar('y', dtype='int32')
     n_samp, n_ch, n_row, n_col = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
-    embd = ConvolutionBuilder(x, (15, 1, 463, 1), prefix = 'conv1')
+    iftrain = T.shared(np.asarray(0, dtype=config.floatX))
+
+    embd = ConvolutionBuilder(x, (5, 1, 20, 3), prefix = 'embd',
+                              stride=(5,1),
+                              W=W_embd, b=b_embd, rand_scheme='standnormal')
     embd_a = ActivationBuilder(embd.output, 'relu')
+
     if time_encoder == 'lstm':
-        reshaped = ReshapeBuilder(embd_a.output, (2, 0, 1))
-        lstm = LSTMBuilder(reshaped.output, prefix = 'lstm')
-        pooled = PoolBuilder(lstm.output, 'mean')
+        #conv = ConvolutionBuilder(embd_a.output, (5, 1, 10, 1), prefix = 'conv',
+        #                        stride=(1,1),
+        #                        W=W_conv, b=b_conv, rand_scheme='standnormal')
+        #conv_a = ActivationBuilder(conv.output, 'relu')
+        pool1 = PoolBuilder(embd_a.output, 'max', ds=(2,1))
+        reshaped = ReshapeBuilder(pool1.output, prefix='reshape', shape=(3,0,(1,2)))
+        lstm = LSTMBuilder(reshaped.output, 220, prefix = 'lstm',
+                           W=W_lstm, U=U_lstm, b=b_lstm, rand_scheme = 'orthogonal')
+        #pooled = PoolBuilder(lstm.output, 'mean', axis=0)
+        if dropout:
+            dropped = DropoutBuilder(lstm.output, 0.2, iftrain, 'dropout')
+            dense = DenseBuilder(dropped.output, 220, num_classes, prefix = 'dense',
+                    W=W_dense, b=b_dense, rand_scheme='standnormal')
+        else:
+            dense = DenseBuilder(lstm.output, 220, num_classes, prefix = 'dense',
+                    W=W_dense, b=b_dense, rand_scheme='standnormal')
+        #dense_a = ActivationBuilder(dense.output, 'relu')
+        #dense2 = DenseBuilder(dense_a.output, 100, 53, prefix = 'dense2',
+        #                     W=W_dense2, b=b_dense2, rand_scheme='standnormal')
+
     elif time_encoder == 'tdnn':
-        tdnn = ConvolutionBuilder(embd_a.output, (15, 15, 1, 3), prefix = 'tdnn')
-    dense = DenseBuilder(pooled.output, 15, 53, prefix = 'dense1')
+        tdnn = ConvolutionBuilder(embd_a.output, (5, 5, 1, 2), prefix = 'tdnn',
+                              stride=(1,1),
+                              W=W_tdnn, b=b_tdnn, rand_scheme='standnormal')
+        reshaped = ReshapeBuilder(tdnn.output, prefix='reshape', shape=(1,2,3))
+        pooled = PoolBuilder(reshaped.output, 'mean', axis=2)
+        reshaped2 = ReshapeBuilder(pooled.output, prefix='reshape2')
+        dense = DenseBuilder(reshaped2.output, 1570, num_classes, prefix = 'dense',
+                             W=W_dense, b=b_dense, rand_scheme='standnormal')
+        #dense_a2 = ActivationBuilder(dense2.output, 'relu')
+        #dense = DenseBuilder(dense_a2.output, 512, 53, prefix = 'dense2',
+        #                     W=W_dense2, b=b_dense2, rand_scheme='standnormal')
+
     dense_a = ActivationBuilder(dense.output, 'softmax')
     cost = get_cost(dense_a.output, y)
     pred = pred_class(dense_a.output)
 
+    # if DEBUG_OUTPUT:
     tx = np.zeros((1,1,463,20), dtype = 'float32')
     f1 = T.function([x], embd_a.output)
-    print('conv out: ', f1(tx).shape)
-    f2 = T.function([x], reshaped.output)
-    print('reshape out: ', f2(tx).shape)
-    f3 = T.function([x], lstm.output)
-    print('lstm out:', f3(tx).shape)
-    f4 = T.function([x], pooled.output)
-    print('pool out: ', f4(tx).shape)
-    f5 = T.function([x], dense_a.output)
-    print('dense out: ', f5(tx).shape)
-    f6 = T.function([x, y], cost)
-    print('cost out: ', f6(tx, 5))
-    f7 = T.function([x], pred)
-    print('pred out: ', f7(tx))
+    print('embd out: ', f1(tx).shape)
+    if time_encoder == 'lstm':
+        #f1_ = T.function([x], conv_a.output)
+        #print('conv out: ', f1_(tx).shape)
+        f1_ = T.function([x], pool1.output)
+        print('pool out: ', f1_(tx).shape)
+        f2 = T.function([x], reshaped.output)
+        print('reshape out: ', f2(tx).shape)
+        f3 = T.function([x], lstm.output)
+        print('lstm out:', f3(tx).shape)
+        #f4 = T.function([x], pooled.output)
+        #print('pool out: ', f4(tx).shape)
+        f5 = T.function([x], dense_a.output)
+        print('dense out: ', f5(tx).shape)
+    elif time_encoder == 'tdnn':
+        f2 = T.function([x], tdnn.output)
+        print('tdnn out: ', f2(tx).shape)
+        f3 = T.function([x], reshaped.output)
+        print('reshape out:', f3(tx).shape)
+        f4 = T.function([x], pooled.output)
+        print('pool out: ', f4(tx).shape)
+        f4_ = T.function([x], reshaped2.output)
+        print('reshape2 out: ', f4_(tx).shape)
+        #f5 = T.function([x], dense_a2.output)
+        #print('dense out: ', f5(tx).shape)
+    f6 = T.function([x], dense_a.output)
+    print('dense out: ', f6(tx).shape)
+    f7 = T.function([x, y], cost)
+    print('cost out: ', f7(tx, 5))
+    f8 = T.function([x], pred)
+    print('pred out: ', f8(tx))
 
-    model = {
-            'embd': embd,
-            'lstm': lstm,
-            'dense': dense
-            }
+    f_pred_prob = T.function([x], dense_a.output, name='f_pred_prob')
+    f_cost = T.function([x, y], cost, name='f_cost')
+    f_pred_class = T.function([x], pred, name='f_pred_class')
 
-    fpred_prob = T.function([x], dense_a.output, name='f_pred_prob')
-    fpred = T.function([x], pred, name='f_pred_class')
+    if time_encoder == 'lstm':
+        params = [
+                embd.params[0], embd.params[1],
+                #conv.params[0], conv.params[1],
+                lstm.params[0], lstm.params[1], lstm.params[2],
+                #dense2.params[0], dense2.params[1]
+                dense.params[0], dense.params[1]
+                ]
+    elif time_encoder == 'tdnn':
+        params = [
+                embd.params[0], embd.params[1],
+                tdnn.params[0], tdnn.params[1],
+                #dense2.params[0], dense2.params[1],
+                dense.params[0], dense.params[1]
+                ]
 
-    params = [
-            embd.params[0], embd.params[1],
-            lstm.params[0], lstm.params[1], lstm.params[2],
-            dense.params[0], dense.params[1]
-            ]
-
+    # TODO: Improvement for clearity
+    # save params as a dict
+    # and grads = tensor.grad(cost, wrt=list(params.values()))
     grads = tensor.grad(cost, wrt = params)
 
-    return x, y, fpred_prob, fpred, cost, params, grads, model
+    # TODO: save model config
+    if time_encoder == 'lstm':
+        model = {
+                'embd': embd,
+                'lstm': lstm,
+                'dense': dense
+                }
+    elif time_encoder == 'tdnn':
+        model = {
+                'embd': embd,
+                'tdnn': tdnn,
+                'dense': dense
+                }
 
-
-"""
-Training related.
-"""
-def sgd(lr, params, grads, x, y, cost):
-    """
-    Stochastic Gradient Descent.
-    """
-    # New set of shared variable that will contain the gradient
-    # for a mini-batch.
-    gshared = [T.shared(p.get_value() * 0., name='%s_grad' % str(k))
-               for k, p in zip(range(len(params)), params)]
-    gs_updt = [(gs, g) for gs, g in zip(gshared, grads)]
-
-    # Function that computes gradients for a mini-batch, but do not
-    # updates the weights.
-    f_grad_shared = T.function([x, y], cost, updates=gs_updt,
-                                    name='sgd_f_grad_shared')
-
-    para_updted = [(p, p - lr * g) for p, g in zip(params, gshared)]
-
-    # Function that updates the weights from the previously computed
-    # gradient.
-    f_update = T.function([lr], [], updates=para_updted,
-                               name='sgd_f_update')
-
-    return f_grad_shared, f_update
-
-def rmsprop(lr, params, grads, x, y, cost):
-    """
-    A variant of SGD that scales the step size by running average of the
-    recent step norms.
-
-    Parameters
-    ----------
-    lr : Theano SharedVariable
-        Initial learning rate
-    pramas: Theano SharedVariable
-        Model parameters
-    grads: Theano variable
-        Gradients of cost w.r.t to parameres
-    x: Theano variable
-        Model inputs
-    y: Theano variable
-        Targets
-    cost: Theano variable
-        Objective fucntion to minimize
-
-    Notes
-    -----
-    For more information, see [Hint2014]_.
-
-    .. [Hint2014] Geoff Hinton, *Neural Networks for Machine Learning*,
-       lecture 6a,
-       http://cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf
-    """
-
-    zipped_grads = [T.shared(p.get_value() * np.asarray(0., dtype=config.floatX),
-                                  name='%s_grad' % str(k))
-                    for k, p in zip(range(len(params)), params)]
-    running_grads = [T.shared(p.get_value() * np.asarray(0., dtype=config.floatX),
-                                  name='%s_rgrad' % str(k))
-                    for k, p in zip(range(len(params)), params)]
-    running_grads2 = [T.shared(p.get_value() * np.asarray(0., dtype=config.floatX),
-                                  name='%s_rgrad2' % str(k))
-                      for k, p in zip(range(len(params)), params)]
-
-    zgup = [(zg, g) for zg, g in zip(zipped_grads, grads)]
-    rgup = [(rg, 0.95 * rg + 0.05 * g) for rg, g in zip(running_grads, grads)]
-    rg2up = [(rg2, 0.95 * rg2 + 0.05 * (g ** 2))
-             for rg2, g in zip(running_grads2, grads)]
-
-    f_grad_shared = T.function([x, y], cost,
-                               updates=zgup + rgup + rg2up,
-                               name='rmsprop_f_grad_shared')
-
-    updir = [T.shared(p.get_value() * np.asarray(0., dtype=config.floatX),
-                      name='%s_updir' % k)
-             for k, p in zip(range(len(params)), params)]
-    updir_new = [(ud, 0.9 * ud - 1e-4 * zg / tensor.sqrt(rg2 - rg ** 2 + 1e-4))
-                 for ud, zg, rg, rg2 in zip(updir, zipped_grads, running_grads,
-                                            running_grads2)]
-    param_up = [(p, p + udn[1])
-                for p, udn in zip(params, updir_new)]
-    f_update = T.function([lr], [], updates=updir_new + param_up,
-                               on_unused_input='ignore',
-                               name='rmsprop_f_update')
-
-    return f_grad_shared, f_update
+    return x, y, f_pred_prob, f_cost, f_pred_class,\
+        cost, params, grads, model, iftrain
 
 def get_minibatches_idx(num_samples, batch_size, shuffle = False):
     samp_idx_list = np.arange(num_samples, dtype = "int32")
@@ -538,21 +235,69 @@ def pred_error(f_pred, data, iterator, verbose=False):
 
     return valid_err
 
+def pack_params(params_list):
+    """
+    Pack the parameters for saving.
+    :params_list: a list of theano shared variables
+    """
+    params = OrderedDict()
+    for i, v in enumerate(params_list):
+        params[str(i)] = v.get_value()
+
+    return params
+
+def load_params(model_path):
+    """
+    Load params from saved model.
+    :model_path: (string) path saving the model params
+    <- list of params
+    """
+    # TODO: Better practice to avoid key-value conflicts
+    # pass in params as dict
+    # and check if loaded params have compatible keys.
+
+    # loaded params is an OrderedDict
+    p = np.load(model_path)
+    pp = [
+            p['0'],
+            p['1'],
+            p['2'],
+            p['3'],
+            p['4'],
+            p['5'],
+            p['6']
+            ]
+
+    return pp
+
 def train_model(
-    patience=50,  # Number of epoch to wait before early stop if no progress
+    dataname='ey',
+    datalist='./ey.interested',
+    num_classes=53,
+    patience=100,  # Number of epoch to wait before early stop if no progress
     max_epochs=10000,  # The maximum number of epoch to run
     dispFreq=100,  # Display to stdout the training progress every N updates
-    lrate=0.01,  # Learning rate for sgd (not used for adadelta and rmsprop)
-    optimizer=sgd,  # sgd, adadelta and rmsprop available, sgd very hard to use, not recommanded (probably need momentum and decaying learning rate).
+    time_encoder='lstm',
+    optimizer=rmsprop,  # sgd, adadelta and rmsprop available, sgd very hard to use, not recommanded (probably need momentum and decaying learning rate).
+    lrate=0.0001,  # Learning rate for sgd (not used for adadelta and rmsprop)
+    gamma=0.9,
     validFreq=5000,  # Compute the validation error after this number of update.
     batch_size=1,  # The batch size during training.
     valid_batch_size=1,  # The batch size used for validation/test set.
+    save_file='model.npz',
+    saveFreq=2000,
+    reload_model_path=None,
+    weight_decay=False,
+    use_dropout=True
 ):
+    # Options for model
+    model_options = locals().copy
+
     print('Preparing data')
     #dpath = './feat_constq'
     dpath = '/mingback/zhaowenbo/EyBreath/feat_constq'
     train, valid, test = edp.load_data(
-        os.path.join(dpath ,'ey'), './ey.interested',
+        os.path.join(dpath ,dataname), datalist,
         shuffle = True, spk_smpl_thrd = 100
     )
     num_trains = len(train)
@@ -560,15 +305,22 @@ def train_model(
     num_tests = len(test)
 
     print('Building model')
-    (x, y, f_pred_prob, f_pred, cost, params, grads, model) = build_model()
+    if reload_model_path: # if reload model
+        print('loading model ...')
+        params = load_params(reload_model_path)
+        print('Done.')
+    else: # init params
+        params = []
 
-    f_cost = T.function([x, y], cost, name='f_cost')
+    (x, y, _, _, f_pred, cost, params, grads, model, iftrain) = build_model(
+        params, num_classes, dropout=use_dropout, time_encoder=time_encoder)
 
-    f_grad = T.function([x, y], grads, name='f_grad')
+    # TODO:
+    if weight_decay:
+        pass
 
-    lr = tensor.scalar(name='lr')
-    f_grad_shared, f_update = optimizer(lr, params, grads,
-                                        x, y, cost)
+    f_grad_shared, f_update = optimizer(params, grads, x, y, cost,
+                                        lr=lrate, gamma=gamma)
 
     print('Training')
 
@@ -579,13 +331,15 @@ def train_model(
     print("%d valid examples" % num_vals)
     print("%d test examples" % num_tests)
 
-    history_errs = []
-    best_p = None
-    bad_counter = 0
-
     if validFreq == -1:
-        validFreq = len(train[0]) // batch_size
+        validFreq = num_trains // batch_size
 
+    if saveFreq == -1:
+        saveFreq = num_trains // batch_size
+
+    history_errs = []
+    best_p = None # best set of params
+    bad_counter = 0
     uidx = 0  # the number of update done
     estop = False  # early stop
     start_time = time.time()
@@ -598,6 +352,7 @@ def train_model(
 
             for _, train_index in kf:
                 uidx += 1
+                iftrain.set_value(1.)
 
                 # Select the random examples for this minibatch
                 #x, y = [train[t] for t in train_index]
@@ -605,7 +360,7 @@ def train_model(
                 n_samples += batch_size
 
                 cost = f_grad_shared(x, y)
-                f_update(lrate)
+                f_update()
 
                 if np.isnan(cost) or np.isinf(cost):
                     print('bad cost detected: ', cost)
@@ -614,12 +369,31 @@ def train_model(
                 if np.mod(uidx, dispFreq) == 0:
                     print('Epoch ', eidx, 'Update ', uidx, 'Cost ', cost)
 
+                if save_file and np.mod(uidx, saveFreq) == 0:
+                    print('Saving model...')
+                    if best_p is None:
+                        best_p = pack_params(params)
+                    np.savez(save_file,
+                           # history_errs=history_errs,
+                            **best_p)
+                    #pickle.dump(model_options,
+                    #            open('%s.pkl' % save_file, 'wb'), -1)
+                    print('Done.')
+
                 if np.mod(uidx, validFreq) == 0:
+                    iftrain.set_value(0.)
+
                     train_err = pred_error(f_pred, train, kf)
                     valid_err = pred_error(f_pred, valid, kf_valid)
                     test_err = pred_error(f_pred, test, kf_test)
 
                     history_errs.append([valid_err, test_err])
+
+                    if ( (best_p is None) or
+                            (valid_err <= np.array(history_errs)[:,0].min()) ):
+                        # pack best params for saving
+                        best_p = pack_params(params)
+                        bad_counter = 0
 
                     print('Train ', train_err, 'Valid ', valid_err,
                            'Test ', test_err)
@@ -642,52 +416,45 @@ def train_model(
 
     end_time = time.time()
 
+    iftrain.set_value(0.)
+
     kf_train_sorted = get_minibatches_idx(num_trains, batch_size)
     train_err = pred_error(f_pred, train, kf_train_sorted)
     valid_err = pred_error(f_pred, valid, kf_valid)
     test_err = pred_error(f_pred, test, kf_test)
 
     print( 'Train ', train_err, 'Valid ', valid_err, 'Test ', test_err )
+
+    if save_file:
+        # if best params not found
+        if best_p is None:
+            # save current params
+            best_p = pack_params(params)
+        np.savez(save_file,
+                 #train_err=train_err,
+                 #valid_err=valid_err,
+                 #test_err=test_err,
+                 #history_errs=history_errs,
+                 **best_p)
+
     print('The code run for %d epochs, with %f sec/epochs' % (
         (eidx + 1), (end_time - start_time) / (1. * (eidx + 1))))
     print( ('Training took %.1fs' %
             (end_time - start_time)), file=sys.stderr)
     return train_err, valid_err, test_err
 
-def run_model():
-    dpath = './feat_constq'
-    read_instance(os.path.join(dpath ,'ey'), './ey.interested')
-
-    num_samples = len(instance_dict)
-    num_trains = int(np.floor(num_samples * 0.8))
-    num_tests = num_samples - num_trains
-
-    all_list = np.random.permutation(xrange(num_samples))
-    train_list = all_list[: num_trains]
-    dev_list = all_list[num_trains : num_samples]
-
-    num_epoch = 10
-    dev_j = 0
-    while True:
-        for i in xrange(num_trains):
-            ins = instance_dict[train_list[i]]
-            inp = np.asarray(ins.featvec, dtype = config.floatX)
-            spk_id = ins.speaker_id
-            lbl = np.asarray(np.zeros((805,)), dtype = config.floatX)
-            lbl[spk_id] = 1.0
-
-            nn = NetBuilder(inp, lbl)
-            nn.trainer(num_epoch)
-            if i % 50 == 0:
-                tins = instance_dict[dev_list[dev_j]]
-                tinp = np.asarray(tins.featvec, dtype = config.floatX)
-                tspk_id = tins.speaker_id
-                tlbl = np.asarray(np.zeros((805,)), dtype = config.floatX)
-                tlbl[tspk_id] = 1.0
-                nn.tester(tinp, tlbl)
-                dev_j += 1
-
 
 if __name__ == '__main__':
-    # run_model()
-    train_model()
+    train_model(
+        dataname='breath',
+        datalist='./breath.interested',
+        num_classes=44, # 44b, 53e
+        patience=10000,
+        time_encoder='lstm',
+        optimizer=adadelta,
+        lrate=0.0001,
+        gamma=0.9,
+        use_dropout=True,
+        save_file='br_lstm_f5-20-3_s5-1_p2-1_t-1_d02_delta.npz',
+        reload_model_path=None)
+        #reload_model_path='ey_lstm_f5-300-3_s50-1_t-1_delta.npz')
