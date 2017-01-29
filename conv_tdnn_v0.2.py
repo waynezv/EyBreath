@@ -69,6 +69,9 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
             W_lstm  = None
             U_lstm  = None
             b_lstm  = None
+            W_lstm2  = None
+            U_lstm2  = None
+            b_lstm2  = None
             W_dense = None
             b_dense = None
             #W_dense2 = None
@@ -79,8 +82,8 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
     n_samp, n_ch, n_row, n_col = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
     iftrain = T.shared(np.asarray(0, dtype=config.floatX))
 
-    embd = ConvolutionBuilder(x, (5, 1, 20, 3), prefix = 'embd',
-                              stride=(5,1),
+    embd = ConvolutionBuilder(x, (20, 1, 3, 3), prefix = 'embd',
+                              stride=(1,1),
                               W=W_embd, b=b_embd, rand_scheme='standnormal')
     embd_a = ActivationBuilder(embd.output, 'relu')
 
@@ -91,15 +94,19 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
         #conv_a = ActivationBuilder(conv.output, 'relu')
         pool1 = PoolBuilder(embd_a.output, 'max', ds=(2,1))
         reshaped = ReshapeBuilder(pool1.output, prefix='reshape', shape=(3,0,(1,2)))
-        lstm = LSTMBuilder(reshaped.output, 220, prefix = 'lstm',
-                           W=W_lstm, U=U_lstm, b=b_lstm, rand_scheme = 'orthogonal')
+        lstm = LSTMBuilder(reshaped.output, 4600, prefix = 'lstm',
+                           W=W_lstm, U=U_lstm, b=b_lstm,
+                           out_idx='last', rand_scheme = 'orthogonal')
+        #lstm2 = LSTMBuilder(lstm.output, 920, prefix = 'lstm2',
+        #                   W=W_lstm2, U=U_lstm2, b=b_lstm2,
+        #                   out_idx='last', rand_scheme = 'orthogonal')
         #pooled = PoolBuilder(lstm.output, 'mean', axis=0)
         if dropout:
-            dropped = DropoutBuilder(lstm.output, 0.2, iftrain, 'dropout')
-            dense = DenseBuilder(dropped.output, 220, num_classes, prefix = 'dense',
+            dropped = DropoutBuilder(lstm.output, 0.5, iftrain, 'dropout')
+            dense = DenseBuilder(dropped.output, 4600, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
         else:
-            dense = DenseBuilder(lstm.output, 220, num_classes, prefix = 'dense',
+            dense = DenseBuilder(lstm2.output, 920, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
         #dense_a = ActivationBuilder(dense.output, 'relu')
         #dense2 = DenseBuilder(dense_a.output, 100, 53, prefix = 'dense2',
@@ -127,16 +134,14 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
     f1 = T.function([x], embd_a.output)
     print('embd out: ', f1(tx).shape)
     if time_encoder == 'lstm':
-        #f1_ = T.function([x], conv_a.output)
-        #print('conv out: ', f1_(tx).shape)
         f1_ = T.function([x], pool1.output)
         print('pool out: ', f1_(tx).shape)
         f2 = T.function([x], reshaped.output)
         print('reshape out: ', f2(tx).shape)
         f3 = T.function([x], lstm.output)
         print('lstm out:', f3(tx).shape)
-        #f4 = T.function([x], pooled.output)
-        #print('pool out: ', f4(tx).shape)
+        #f3_ = T.function([x], lstm2.output)
+        #print('lstm2 out:', f3_(tx).shape)
         f5 = T.function([x], dense_a.output)
         print('dense out: ', f5(tx).shape)
     elif time_encoder == 'tdnn':
@@ -153,7 +158,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
     f6 = T.function([x], dense_a.output)
     print('dense out: ', f6(tx).shape)
     f7 = T.function([x, y], cost)
-    print('cost out: ', f7(tx, 5))
+    print('cost out: ', f7(tx, 1))
     f8 = T.function([x], pred)
     print('pred out: ', f8(tx))
 
@@ -166,6 +171,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
                 embd.params[0], embd.params[1],
                 #conv.params[0], conv.params[1],
                 lstm.params[0], lstm.params[1], lstm.params[2],
+                #lstm2.params[0], lstm2.params[1], lstm2.params[2],
                 #dense2.params[0], dense2.params[1]
                 dense.params[0], dense.params[1]
                 ]
@@ -273,6 +279,7 @@ def load_params(model_path):
 def train_model(
     dataname='ey',
     datalist='./ey.interested',
+    sample_threshold=100,
     num_classes=53,
     patience=100,  # Number of epoch to wait before early stop if no progress
     max_epochs=10000,  # The maximum number of epoch to run
@@ -297,8 +304,9 @@ def train_model(
     #dpath = './feat_constq'
     dpath = '/mingback/zhaowenbo/EyBreath/feat_constq'
     train, valid, test = edp.load_data(
-        os.path.join(dpath ,dataname), datalist,
-        shuffle = True, spk_smpl_thrd = 100
+        os.path.join(dpath, dataname), datalist,
+        shuffle=True, spk_smpl_thrd=sample_threshold,
+        use_dct=False, distort=True
     )
     num_trains = len(train)
     num_vals = len(valid)
@@ -446,15 +454,18 @@ def train_model(
 
 if __name__ == '__main__':
     train_model(
-        dataname='breath',
-        datalist='./breath.interested',
-        num_classes=44, # 44b, 53e
+        dataname='ey',
+        datalist='./ey.interested',
+        sample_threshold=100,
+        num_classes=53,
+        # ey: 100:53, 200:22, 300:14, 500:4
+        # br: 100:44, 200:20
         patience=10000,
         time_encoder='lstm',
         optimizer=adadelta,
         lrate=0.0001,
         gamma=0.9,
         use_dropout=True,
-        save_file='br_lstm_f5-20-3_s5-1_p2-1_t-1_d02_delta.npz',
+        save_file='ey100_distt_lstm_f20-3-3_s1-1_p2-1_d05_delta.npz',
         reload_model_path=None)
-        #reload_model_path='ey_lstm_f5-300-3_s50-1_t-1_delta.npz')
+        #reload_model_path='br100_lstm_f4-3-3_s1-1_p2-1_t-1_d02_delta.npz')

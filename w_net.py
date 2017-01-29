@@ -37,7 +37,7 @@ class LSTMBuilder:
     Net builder for LSTM.
     """
     def __init__(self, inp, embd_size, prefix,
-                 W=None, U=None, b=None, rand_scheme = 'orthogonal'):
+                 W=None, U=None, b=None, out_idx='all', rand_scheme = 'orthogonal'):
         """
         :inp: (num_time_steps, num_samples, num_embedding_size)
 
@@ -109,8 +109,10 @@ class LSTMBuilder:
                                n_steps = n_tstep,
                                strict=False)
 
-        #self.output = rval[0] # h: (n_tstep, n_samp, embd_size)
-        self.output = rval[0][-1] # h: (n_samp, embd_size)
+        if out_idx == 'all':
+            self.output = rval[0] # h: (n_tstep, n_samp, embd_size)
+        elif out_idx == 'last':
+            self.output = rval[0][-1] # h: (n_samp, embd_size)
 
         self.f = T.function([inp], self.output, name = 'f_' + prefix)
         self.params = [self.W, self.U, self.b]

@@ -6,6 +6,9 @@ import os
 import sys
 
 import numpy as np
+from scipy.fftpack import dct, idct
+from scipy.ndimage.interpolation import map_coordinates
+from scipy.ndimage.filters import gaussian_filter
 from theano import config
 
 speaker_dict = dict() # store 'speaker_id (string) : id (integer)' pairs
@@ -21,6 +24,22 @@ def normalization():
     """
     pass
 
+def elastic_transform(image, alpha, sigma, random_state=None):
+    assert len(image.shape)==2
+
+    if random_state is None:
+        random_state = np.random.RandomState(None)
+
+    shape = image.shape
+
+    dx = gaussian_filter((random_state.rand(*shape) * 2 - 1), sigma, mode="constant", cval=0) * alpha
+    dy = gaussian_filter((random_state.rand(*shape) * 2 - 1), sigma, mode="constant", cval=0) * alpha
+
+    x, y = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]), indexing='ij')
+    indices = np.reshape(x+dx, (-1, 1)), np.reshape(y+dy, (-1, 1))
+
+    return map_coordinates(image, indices, order=1).reshape(shape)
+
 class Instance:
     """
     One training instance.
@@ -30,7 +49,9 @@ class Instance:
         self.speaker_id = speaker_id
         self.featvec = featvec
 
-def read_instance(data_path, filename, spk_smpl_thrd = 100, wrt_dict = False):
+def read_instance(data_path, filename, spk_smpl_thrd = 100,
+        use_dct=False, distort=False,
+        wrt_dict = False):
     """
     Read data as instances.
 
@@ -64,7 +85,20 @@ def read_instance(data_path, filename, spk_smpl_thrd = 100, wrt_dict = False):
             for line in open(os.path.join(data_path, file))
         ], dtype = 'float')
 
-        instance_dict[sspk_id].append( Instance(file, speaker_id, featvec) )
+        if distort:
+            rds = np.random.RandomState(1234)
+            for dst_idx in xrange(10):
+                featvec = elastic_transform(featvec, 34, 4, random_state=rds)
+                instance_dict[sspk_id].append( Instance(file, speaker_id, featvec) )
+
+        if dct:
+            coeff = dct(featvec, axis=0, norm='ortho')
+            coeff[0:50, :] = 0.
+            featvec = idct(coeff)
+            instance_dict[sspk_id].append( Instance(file, speaker_id, featvec) )
+
+        else:
+            instance_dict[sspk_id].append( Instance(file, speaker_id, featvec) )
 
     enrolled_ins_count = 0 # counter for enrolled instances
     sid = 0
@@ -73,7 +107,7 @@ def read_instance(data_path, filename, spk_smpl_thrd = 100, wrt_dict = False):
             ins_list = instance_dict[k]
             enrolled_ins_count += len(ins_list)
             for r in ins_list:
-                ins_list[r].speaker_id = int(sid) # reprog speaker id
+                r.speaker_id = int(sid) # reprog speaker id
             instance_collection.append(ins_list) # add instances to collection
             sid += 1
     num_enrolled_spk = len(instance_collection) # number of enrolled speakers
@@ -118,13 +152,15 @@ def prepare_data(ins_list, idx_list):
 
     return zip(X, y)
 
-def load_data(dpath, filename, shuffle = False, spk_smpl_thrd = 100):
+def load_data(dpath, filename, shuffle = False, spk_smpl_thrd = 100,
+        use_dct=False, distort=False):
     """
     Load data.
     <- train_set, val_set, test_set: [X (list of 4d tensors), y (list of integers)]
     """
     # Read instances from constant Q features
-    num_enrolled_spk, enrolled_ins_count = read_instance(dpath, filename, spk_smpl_thrd)
+    num_enrolled_spk, enrolled_ins_count = read_instance(dpath, filename,
+            spk_smpl_thrd, use_dct=use_dct, distort=distort)
 
     # Split dataset
     train_set = []
@@ -170,6 +206,6 @@ def load_data(dpath, filename, shuffle = False, spk_smpl_thrd = 100):
 
 
 if __name__ == '__main__':
-    dpath = './feat_constq'
-    # dpath = '/mingback/zhaowenbo/EyBreath/feat_constq'
+    #dpath = './feat_constq'
+    dpath = '/mingback/zhaowenbo/EyBreath/feat_constq'
     train_set, val_set, test_set = load_data(os.path.join(dpath ,'ey'), './ey.interested', shuffle = True, spk_smpl_thrd = 100)
