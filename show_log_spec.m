@@ -33,15 +33,15 @@ for i = 3:length(raw)
 end
 feat = reshape(feat, [num_frm, 40]);
 % Visualize
-figure;
-subplot(211);
-imagesc(feat');
-colormap jet;
-xlabel('Time');
-ylabel('Freq');
-title(strcat('log mel spectrumgram, speaker ', num2str(id)));
-subplot(212);
-plot(feat);
-xlabel('Time');
-ylabel('Power');
+% figure;
+% subplot(211);
+% imagesc(feat');
+% colormap jet;
+% xlabel('Time');
+% ylabel('Freq');
+% title(strcat('log mel spectrumgram, speaker ', num2str(id)));
+% subplot(212);
+% plot(feat);
+% xlabel('Time');
+% ylabel('Power');
 end

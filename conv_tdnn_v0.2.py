@@ -82,7 +82,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
     n_samp, n_ch, n_row, n_col = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
     iftrain = T.shared(np.asarray(0, dtype=config.floatX))
 
-    embd = ConvolutionBuilder(x, (20, 1, 3, 3), prefix = 'embd',
+    embd = ConvolutionBuilder(x, (5, 1, 3, 3), prefix = 'embd',
                               stride=(1,1),
                               W=W_embd, b=b_embd, rand_scheme='standnormal')
     embd_a = ActivationBuilder(embd.output, 'relu')
@@ -94,7 +94,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
         #conv_a = ActivationBuilder(conv.output, 'relu')
         pool1 = PoolBuilder(embd_a.output, 'max', ds=(2,1))
         reshaped = ReshapeBuilder(pool1.output, prefix='reshape', shape=(3,0,(1,2)))
-        lstm = LSTMBuilder(reshaped.output, 4600, prefix = 'lstm',
+        lstm = LSTMBuilder(reshaped.output, 1150, prefix = 'lstm',
                            W=W_lstm, U=U_lstm, b=b_lstm,
                            out_idx='last', rand_scheme = 'orthogonal')
         #lstm2 = LSTMBuilder(lstm.output, 920, prefix = 'lstm2',
@@ -103,7 +103,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
         #pooled = PoolBuilder(lstm.output, 'mean', axis=0)
         if dropout:
             dropped = DropoutBuilder(lstm.output, 0.5, iftrain, 'dropout')
-            dense = DenseBuilder(dropped.output, 4600, num_classes, prefix = 'dense',
+            dense = DenseBuilder(dropped.output, 1150, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
         else:
             dense = DenseBuilder(lstm2.output, 920, num_classes, prefix = 'dense',
@@ -281,6 +281,14 @@ def train_model(
     datalist='./ey.interested',
     sample_threshold=100,
     num_classes=53,
+    use_unknown=False,
+    unknown_class=None,
+    use_dct=False,
+    distort=False,
+    sigma=None,
+    alpha=None,
+    ds_limit=5,
+
     patience=100,  # Number of epoch to wait before early stop if no progress
     max_epochs=10000,  # The maximum number of epoch to run
     dispFreq=100,  # Display to stdout the training progress every N updates
@@ -291,6 +299,7 @@ def train_model(
     validFreq=5000,  # Compute the validation error after this number of update.
     batch_size=1,  # The batch size during training.
     valid_batch_size=1,  # The batch size used for validation/test set.
+
     save_file='model.npz',
     saveFreq=2000,
     reload_model_path=None,
@@ -306,7 +315,9 @@ def train_model(
     train, valid, test = edp.load_data(
         os.path.join(dpath, dataname), datalist,
         shuffle=True, spk_smpl_thrd=sample_threshold,
-        use_dct=False, distort=True
+        use_unknown=use_unknown, unknown_class=unknown_class,
+        use_dct=use_dct,
+        distort=distort, sigma=sigma, alpha=alpha, ds_limit=ds_limit
     )
     num_trains = len(train)
     num_vals = len(valid)
@@ -460,12 +471,20 @@ if __name__ == '__main__':
         num_classes=53,
         # ey: 100:53, 200:22, 300:14, 500:4
         # br: 100:44, 200:20
+        use_unknown=False,
+        unknown_class=None,
+        use_dct=False,
+        distort=True,
+        sigma=2,
+        alpha=15,
+        ds_limit=5,
+
         patience=10000,
         time_encoder='lstm',
         optimizer=adadelta,
         lrate=0.0001,
         gamma=0.9,
         use_dropout=True,
-        save_file='ey100_distt_lstm_f20-3-3_s1-1_p2-1_d05_delta.npz',
-        reload_model_path=None)
-        #reload_model_path='br100_lstm_f4-3-3_s1-1_p2-1_t-1_d02_delta.npz')
+        save_file='ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz',
+        #reload_model_path=None)
+        reload_model_path='ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz')

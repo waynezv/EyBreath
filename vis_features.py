@@ -29,8 +29,8 @@ def elastic_transform(image, alpha, sigma, random_state=None):
     return map_coordinates(image, indices, order=3, mode='nearest').reshape(shape)
 
 
-data_path = './feat_constq/ey'
-filename = './ey.interested'
+data_path = './feat_constq/breath'
+filename = './breath.interested'
 ins_limit = 1
 ds_limit = 1
 alpha = 15
