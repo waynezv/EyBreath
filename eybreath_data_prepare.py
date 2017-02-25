@@ -38,7 +38,7 @@ def elastic_transform(image, alpha, sigma, random_state=None):
     x, y = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]), indexing='ij')
     indices = np.reshape(x+dx, (-1, 1)), np.reshape(y+dy, (-1, 1))
 
-    return map_coordinates(image, indices, order=1).reshape(shape)
+    return map_coordinates(image, indices, order=3, mode="nearest").reshape(shape)
 
 class Instance:
     """
@@ -50,7 +50,9 @@ class Instance:
         self.featvec = featvec
 
 def read_instance(data_path, filename, spk_smpl_thrd = 100,
-        use_dct=False, distort=False,
+        use_dct=False,
+        use_unknown=False, unknown_class=None,
+        distort=False, sigma=None, alpha=None, ds_limit=5,
         wrt_dict = False):
     """
     Read data as instances.
@@ -87,14 +89,16 @@ def read_instance(data_path, filename, spk_smpl_thrd = 100,
 
         if distort:
             rds = np.random.RandomState(1234)
-            for dst_idx in xrange(10):
-                featvec = elastic_transform(featvec, 34, 4, random_state=rds)
+            for _ in xrange(ds_limit):
+                featvec = elastic_transform(featvec, alpha, sigma, random_state=rds)
                 instance_dict[sspk_id].append( Instance(file, speaker_id, featvec) )
 
         if dct:
-            coeff = dct(featvec, axis=0, norm='ortho')
-            coeff[0:50, :] = 0.
-            featvec = idct(coeff)
+            coeff = dct(dct(featvec, axis=0, norm='ortho'), axis=1, norm='ortho')
+            coeff[0:15, 0:15] = 0.
+            featvec = idct(idct(coeff, axis=1), axis=0)
+            #featvec = (featvec - np.amin(featvec)) / \
+            #        (np.amax(featvec) - np.amin(featvec))
             instance_dict[sspk_id].append( Instance(file, speaker_id, featvec) )
 
         else:
@@ -110,6 +114,11 @@ def read_instance(data_path, filename, spk_smpl_thrd = 100,
                 r.speaker_id = int(sid) # reprog speaker id
             instance_collection.append(ins_list) # add instances to collection
             sid += 1
+        elif use_unknown: # put in 'unknown' class
+            ins_list = instance_dict[k]
+            for r in ins_list:
+                r.speaker_id = unknown_class # TODO: out of set classes
+            instance_collection.append(ins_list)
     num_enrolled_spk = len(instance_collection) # number of enrolled speakers
 
     if wrt_dict:
@@ -153,14 +162,18 @@ def prepare_data(ins_list, idx_list):
     return zip(X, y)
 
 def load_data(dpath, filename, shuffle = False, spk_smpl_thrd = 100,
-        use_dct=False, distort=False):
+        use_unknown=False, unknown_class=None,
+        use_dct=False,
+        distort=False, sigma=None, alpha=None, ds_limit=5):
     """
     Load data.
     <- train_set, val_set, test_set: [X (list of 4d tensors), y (list of integers)]
     """
     # Read instances from constant Q features
     num_enrolled_spk, enrolled_ins_count = read_instance(dpath, filename,
-            spk_smpl_thrd, use_dct=use_dct, distort=distort)
+            spk_smpl_thrd=spk_smpl_thrd, use_unknown=use_unknown, unknown_class=unknown_class,
+            use_dct=use_dct,
+            distort=distort, sigma=sigma, alpha=alpha, ds_limit=ds_limit)
 
     # Split dataset
     train_set = []
