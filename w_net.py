@@ -335,7 +335,10 @@ def get_cost(pred_prob, y):
     return cost
 
 def pred_class(pred_prob):
-    if pred_prob.ndim == 2:
+    # Deprecated:
+    # cause dtype error in theano
+    # reasons unknown
+    if (pred_prob.ndim == 2):
         return np.argmax(pred_prob, axis=1)
     return np.argmax(pred_prob)
 
