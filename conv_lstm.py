@@ -297,6 +297,7 @@ def plot_confusion_matrix(cm, classes,
     plt.xlabel('Predicted label')
 
 def train_model(
+    dpath = '../feat_constq',
     dataname='ey',
     datalist='./ey.interested',
     sample_threshold=100,
@@ -351,7 +352,6 @@ def train_model(
                                         lr=lrate, gamma=gamma)
 
     print('Preparing data')
-    dpath = '../feat_constq'
     if not escape_train:
         train, valid, test = edp.load_data(
             os.path.join(dpath, dataname), datalist,
@@ -536,6 +536,8 @@ def train_model(
 
 if __name__ == '__main__':
     train_model(
+        # dpath = '../feat_constq/',
+        dpath = '~/Downloads/Data/Rita/EyBreath/data/feat_constq/',
         dataname='ey',
         datalist='./ey_selected_100',
         sample_threshold=100,
@@ -545,7 +547,7 @@ if __name__ == '__main__':
         use_unknown=False,
         unknown_class=None,
         use_dct=False,
-        distort=True,
+        distort=False,
         sigma=2,
         alpha=15,
         ds_limit=5,
@@ -557,12 +559,13 @@ if __name__ == '__main__':
         gamma=0.9,
         use_dropout=True,
 
-        #  escape_train=True,
-        #  num_tests=1000,
+        escape_train=True,
+        num_tests=1000,
 
-        escape_train=False,
-        num_tests=None,
+        # escape_train=False,
+        # num_tests=None,
 
         save_file='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz',
         #reload_model_path=None)
-        reload_model_path='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.bkp')
+        # reload_model_path='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.bkp')
+        reload_model_path='./ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.bkp')
