@@ -14,7 +14,6 @@ import theano as T
 import theano.tensor as tensor
 from theano import config
 import sklearn.metrics as metrics
-import matplotlib.pyplot as plt
 import itertools
 
 import eybreath_data_prepare as edp
@@ -209,33 +208,30 @@ def pred_error(f_pred_prob, f_pred_class, data, iterator, verbose=False):
     :data: [(x(list), y(int)), ...]
     :iterator: list: [index, [sample_indexes]] @get_minibatches_idx
     """
-    valid_err = 0
-    valid_cnt = 0
     y_prob = []
     y_pred = []
     y_true = []
     for _, valid_index in iterator:
-        # TODO: bug TypeError: iteration over a 0-d array
-        # y_prob: [ array[[]] ]
-        y_prob.extend(f_pred_prob(data[i][0]) for i in valid_index)
         y_pred.extend(f_pred_class(data[i][0]) for i in valid_index)
         y_true.extend(data[i][1] for i in valid_index)
 
     acc = metrics.accuracy_score(y_true, y_pred)
-    conf_mat = metrics.confusion_matrix(y_true, y_pred)
-    # rept = metrics.classification_report(y_true, y_pred,
-                                         # target_names=[str(i) for i in range(len(y_true))])
 
-    # fpr, tpr, thrshld = metrics.roc_curve(y_true, y_prob)
+    return (1-acc)
 
-    # More metrics
-    # prec = metrics.precision_score(y_true, y_pred, pos_label=1, average='binary')
-    # recl = metrics.recall_score(y_true, y_pred, pos_label=1, average='binary')
-    # f_sc = metrics.f1_score(y_true, y_pred, pos_label=1, average='binary')
-    # precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
+def compute_metrics(f_pred_prob, f_pred_class, data, iterator, verbose=False):
+    y_prob = []
+    y_pred = []
+    y_true = []
+    for _, valid_index in iterator:
+        prob_tmp = [f_pred_prob(data[i][0]) for i in valid_index]
+        y_prob.extend( list(itertools.chain.from_iterable(prob_tmp)) )
+        y_pred.extend(f_pred_class(data[i][0]) for i in valid_index)
+        y_true.extend(data[i][1] for i in valid_index)
 
-     # return acc, conf_mat, rept, zip(fpr, tpr, thrshld)
-    return acc, conf_mat
+    acc = metrics.accuracy_score(y_true, y_pred)
+
+    return acc, y_prob, y_pred, y_true
 
 def pack_params(params_list):
     """
@@ -274,39 +270,6 @@ def load_params(model_path):
 
     return pp
 
-def plot_confusion_matrix(cm, classes,
-                          normalize=False, title='Confusion matrix',
-                          cmap=plt.cm.Blues):
-    """
-    Prints and plots the confusion matrix.
-    Normalization can be applied by setting `normalize=True`.
-    """
-
-    plt.imshow(cm, interpolation='nearest', cmap=cmap)
-    plt.title(title)
-    plt.colorbar()
-    tick_marks = np.arange(len(classes))
-    plt.xticks(tick_marks, classes, rotation=45)
-    plt.yticks(tick_marks, classes)
-
-    if normalize:
-        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-        print("Normalized confusion matrix")
-    else:
-        print('Confusion matrix, without normalization')
-
-    print(cm)
-
-    thresh = cm.max() / 2.
-    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-        plt.text(j, i, cm[i, j],
-                 horizontalalignment="center",
-                 color="white" if cm[i, j] > thresh else "black")
-
-    plt.tight_layout()
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
-
 def train_model(
     dpath = '../feat_constq',
     dataname='ey',
@@ -328,7 +291,7 @@ def train_model(
     max_epochs=10000,  # The maximum number of epoch to run
     dispFreq=100,  # Display to stdout the training progress every N updates
     time_encoder='lstm', # lstm or tdnn
-    optimizer=rmsprop,  # sgd, adadelta and rmsprop available, sgd very hard to use, not recommanded (probably need momentum and decaying learning rate).
+    optimizer=sgd,  # sgd, adadelta and rmsprop available, sgd very hard to use, not recommanded (probably need momentum and decaying learning rate).
     lrate=0.0001,  # Learning rate for sgd (not used for adadelta and rmsprop)
     gamma=0.9, # for adaxxx
     validFreq=5000,  # Compute the validation error after this number of update.
@@ -413,7 +376,7 @@ def train_model(
         if saveFreq == -1:
             saveFreq = num_trains // batch_size
 
-        history_errs = []
+        history_errs = [] # record history of errors
         best_p = None # best set of params
         bad_counter = 0 # count non-decreasing trains
         uidx = 0  # the number of updates done
@@ -429,7 +392,8 @@ def train_model(
 
                 for _, train_index in kf:
                     uidx += 1
-                    iftrain.set_value(1.)
+
+                    iftrain.set_value(1.) # dropout
 
                     # Select the random examples for this minibatch
                     x, y = train[train_index[0]]
@@ -452,29 +416,29 @@ def train_model(
                         print('Saving model...')
                         if best_p is None:
                             best_p = pack_params(params)
+
                         np.savez(save_file,
-                            # history_errs=history_errs,
                                 **best_p)
-                        #pickle.dump(model_options,
-                        #            open('%s.pkl' % save_file, 'wb'), -1)
+                        np.savez('err_history_' + save_file,
+                                 history_errs=history_errs)
+                        # TODO: save:
+                        # model options
+                        # pickle.dump(model_options,
+                                   # open('%s.pkl' % save_file, 'wb'), -1)
                         print('Done.')
 
                     # Validation
                     if np.mod(uidx, validFreq) == 0:
-                        iftrain.set_value(0.)
+                        iftrain.set_value(0.) # not dropout
 
-                        train_acc, _ = pred_error(f_pred_prob, f_pred_class, train, kf)
-                        valid_acc, _ = pred_error(f_pred_prob, f_pred_class, valid, kf_valid)
-                        test_acc, _ = pred_error(f_pred_prob, f_pred_class, test, kf_test)
+                        train_err = pred_error(f_pred_prob, f_pred_class, train, kf)
+                        valid_err = pred_error(f_pred_prob, f_pred_class, valid, kf_valid)
+                        test_err = pred_error(f_pred_prob, f_pred_class, test, kf_test)
 
-                        train_err = 1 - train_acc
-                        valid_err = 1 - valid_acc
-                        test_err = 1 - test_acc
-
-                        history_errs.append([valid_err, test_err])
+                        history_errs.append([train_err, valid_err, test_err])
 
                         if ( (best_p is None) or
-                                (valid_err <= np.array(history_errs)[:,0].min()) ):
+                                (valid_err <= np.array(history_errs)[:,1].min()) ):
                             # pack best params for saving
                             best_p = pack_params(params)
                             bad_counter = 0
@@ -483,7 +447,7 @@ def train_model(
                             'Test ', test_err)
 
                         if (len(history_errs) > patience and
-                            valid_err >= np.array(history_errs)[:-patience, 0].min()):
+                            valid_err >= np.array(history_errs)[:-patience, 1].min()):
                             bad_counter += 1
                             if bad_counter > patience:
                                 print('Early Stop!')
@@ -503,26 +467,21 @@ def train_model(
         iftrain.set_value(0.)
 
         kf_train_sorted = get_minibatches_idx(num_trains, batch_size)
-        train_acc, train_conf_mat = pred_error(f_pred_prob, f_pred_class, train, kf_train_sorted)
-        valid_acc, valid_conf_mat = pred_error(f_pred_prob, f_pred_class, valid, kf_valid)
-        test_acc, test_conf_mat = pred_error(f_pred_prob, f_pred_class, test, kf_test)
+        train_err = pred_error(f_pred_prob, f_pred_class, train, kf_train_sorted)
+        valid_err = pred_error(f_pred_prob, f_pred_class, valid, kf_valid)
+        test_err = pred_error(f_pred_prob, f_pred_class, test, kf_test)
 
-        print( 'Acc: Train ', train_acc, 'Valid ', valid_acc, 'Test ', test_acc )
-        print( 'Confusion matrix: Train ', train_conf_mat, 'Valid ', valid_conf_mat, 'Test ', test_conf_mat )
-        # TODO
-        # print( 'Report: Train ', train_rept, 'Valid ', valid_rept, 'Test ', test_rept)
+        print( 'Err: Train ', train_err, 'Valid ', valid_err, 'Test ', test_err )
+        history_errs.append([train_err, valid_err, test_err])
 
         if save_file:
-            # if best params not found
-            if best_p is None:
-                # save current params
-                best_p = pack_params(params)
+            if best_p is None: # if best params not found
+                best_p = pack_params(params) # save current params
+
             np.savez(save_file,
-                    #train_err=train_err, # TODO
-                    #valid_err=valid_err,
-                    #test_err=test_err,
-                    #history_errs=history_errs,
                     **best_p)
+            np.savez('err_history_' + save_file,
+                        history_errs=history_errs)
 
         print('The code run for %d epochs, with %f sec/epochs' % (
             (eidx + 1), (end_time - start_time) / (1. * (eidx + 1))))
@@ -532,27 +491,17 @@ def train_model(
         return train_acc, valid_acc, test_acc
 
     else: # testing only
-        test_acc, test_conf_mat = pred_error(f_pred_prob, f_pred_class, test, kf_test)
+        acc, prob, pred, true = compute_metrics(f_pred_prob, f_pred_class, test, kf_test)
+        print( 'Test acc: ', acc)
 
-        print( 'Acc: Test ', test_acc )
-        print( 'Confusion matrix: Test ', test_conf_mat )
-        # print( 'Report: Test ', test_rept)
+        np.savez('metric_'+save_file
+                 acc=acc,
+                 prob=prob,
+                 pred=pred,
+                 true=true
+                 )
 
-        np.set_printoptions(precision=2)
-        class_names = [str(i) for i in range(num_classes)]
-        # Plot non-normalized confusion matrix
-        plt.figure()
-        plot_confusion_matrix(cnf_matrix, classes=class_names,
-        title='Confusion matrix, without normalization')
-
-        # Plot normalized confusion matrix
-        plt.figure()
-        plot_confusion_matrix(cnf_matrix, classes=class_names, normalize=True,
-        title='Normalized confusion matrix')
-
-        plt.show()
-
-        return test_acc
+        return acc
 
 
 if __name__ == '__main__':
@@ -576,19 +525,27 @@ if __name__ == '__main__':
         alpha=15,
         ds_limit=2,
 
-        patience=10000,
         time_encoder='lstm',
         optimizer=adadelta,
         lrate=0.0001,
         gamma=0.9,
+
+        batch_size=1,
+        valid_batch_size=1,
+        max_epochs=10000,
+        patience=10000,
+        dispFreq=100,
+        validFreq=5000,
+
+        weight_decay=False,
         use_dropout=True,
-        validFreq=20000,
 
         # escape_train=True,
         # num_tests=1000,
         escape_train=False,
         num_tests=None,
 
+        saveFreq=2000,
         save_file='../npz/br100_close_et2_f8-3-3_s1-1_p2-1_d06_delta.npz',
         reload_model_path=None)
         # reload_model_path='../npz/br100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz')

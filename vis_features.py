@@ -6,10 +6,10 @@ import numpy as np
 from scipy.fftpack import dct, idct
 from scipy.ndimage.interpolation import map_coordinates
 from scipy.ndimage.filters import gaussian_filter
-import matplotlib.pyplot as plt
 from skimage.feature import hog
 from skimage import color, exposure, feature
 from skimage.filters import roberts, sobel, scharr, prewitt, sobel_v, sobel_h
+import matplotlib.pyplot as plt
 
 
 def elastic_transform(image, alpha, sigma, random_state=None):
