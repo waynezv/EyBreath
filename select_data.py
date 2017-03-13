@@ -44,15 +44,14 @@ def write_data_list(filename, data_list):
     with open(filename, 'w') as f:
         f.write(out)
 
-def select_data(data_path, filename, spk_smpl_thrd = 100, write_dict=False):
+def select_data(data_path, data_name, filelist_name, spk_smpl_thrd = 100, write_dict=False):
     """
     Select speakers and instances that exceeds threshold.
     """
-
     # Read all instances
-    filelist = [l for l in open(filename)] # all files in filename
+    filelist = [l for l in open(filelist_name)] # all files in filelist_name
     interest_filelist = [''.join([ l.split()[0].split('.')[0], '.txt' ])
-                         for l in filelist] # files of interest
+                         for l in filelist] # list of files of interest
 
     num_files = len(filelist)
 
@@ -96,7 +95,7 @@ def select_data(data_path, filename, spk_smpl_thrd = 100, write_dict=False):
             ins_list = instance_dict[k]
             unknown_list.extend(''.join([ins.file_id, ' ', k]) for ins in ins_list)
 
-    print('processed ', filename, ', total ', num_files, ' files')
+    print('processed ', filelist_name, ', total ', num_files, ' files')
     print('total ', len(speaker_dict), ' speakers')
     print('totally enrolled ', len(data_list), ' instances, ',
           num_enrolled_spk, ' speakers.')
@@ -104,8 +103,8 @@ def select_data(data_path, filename, spk_smpl_thrd = 100, write_dict=False):
           len(speaker_dict)-num_enrolled_spk, ' speakers.')
 
     # Save list
-    sel_name = ''.join(['ey_selected_', str(spk_smpl_thrd)])
-    unk_name = ''.join(['ey_unknown_', str(spk_smpl_thrd)])
+    sel_name = ''.join([dname, '_selected_', str(spk_smpl_thrd)])
+    unk_name = ''.join([dname, '_unknown_', str(spk_smpl_thrd)])
 
     write_data_list(sel_name, data_list)
     write_data_list(unk_name, unknown_list)
@@ -121,4 +120,5 @@ def select_data(data_path, filename, spk_smpl_thrd = 100, write_dict=False):
 
 if __name__ == '__main__':
     dpath = '../feat_constq'
-    select_data(os.path.join(dpath ,'ey'), './ey.interested', spk_smpl_thrd = 100)
+    dname = 'breath'
+    select_data(dpath, dname, './breath.interested', spk_smpl_thrd = 100)
