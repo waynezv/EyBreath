@@ -79,7 +79,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
     n_samp, n_ch, n_row, n_col = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
     iftrain = T.shared(np.asarray(0, dtype=config.floatX))
 
-    embd = ConvolutionBuilder(x, (5, 1, 3, 3), prefix = 'embd',
+    embd = ConvolutionBuilder(x, (8, 1, 3, 3), prefix = 'embd',
                               stride=(1,1),
                               W=W_embd, b=b_embd, rand_scheme='standnormal')
     embd_a = ActivationBuilder(embd.output, 'relu')
@@ -87,15 +87,15 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
     if time_encoder == 'lstm':
         pooled = PoolBuilder(embd_a.output, 'max', ds=(2,1))
         reshaped = ReshapeBuilder(pooled.output, prefix='reshape', shape=(3,0,(1,2)))
-        lstm = LSTMBuilder(reshaped.output, 1150, prefix = 'lstm',
+        lstm = LSTMBuilder(reshaped.output, 1840, prefix = 'lstm',
                            W=W_lstm, U=U_lstm, b=b_lstm,
                            out_idx='last', rand_scheme = 'orthogonal')
         if dropout:
-            dropped = DropoutBuilder(lstm.output, 0.5, iftrain, 'dropout')
-            dense = DenseBuilder(dropped.output, 1150, num_classes, prefix = 'dense',
+            dropped = DropoutBuilder(lstm.output, 0.6, iftrain, 'dropout')
+            dense = DenseBuilder(dropped.output, 1840, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
         else:
-            dense = DenseBuilder(lstm2.output, 920, num_classes, prefix = 'dense',
+            dense = DenseBuilder(lstm.output, 920, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
 
     elif time_encoder == 'tdnn':
@@ -127,9 +127,6 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
     print('5. dropped out:', f4(tx).shape)
     f5 = T.function([x], dense.output)
     print('6. dense out: ', f5(tx).shape)
-
-    f6 = T.function([x], dense_a.output)
-    print('dense_a out: ', f6(tx).shape)
     f7 = T.function([x, y], cost)
     print('7. cost out: ', f7(tx, 0))
     f8 = T.function([x], pred)
@@ -302,9 +299,12 @@ def train_model(
     datalist='./ey.interested',
     sample_threshold=100,
     num_classes=53,
+
     use_unknown=False,
     unknown_class=None,
+
     use_dct=False,
+
     distort=False,
     sigma=None,
     alpha=None,
@@ -321,14 +321,15 @@ def train_model(
     batch_size=1,  # The batch size during training.
     valid_batch_size=1,  # The batch size used for validation/test set.
 
-    save_file='model.npz',
-    saveFreq=2000,
-    reload_model_path=None,
     weight_decay=False,
     use_dropout=True,
 
     escape_train=False,
-    num_tests=None
+    num_tests=None,
+
+    save_file='model.npz',
+    saveFreq=2000,
+    reload_model_path=None
 ):
     # Options for model
     model_options = locals().copy
@@ -352,7 +353,7 @@ def train_model(
                                         lr=lrate, gamma=gamma)
 
     print('Preparing data')
-    if not escape_train:
+    if not escape_train: # normal training
         train, valid, test = edp.load_data(
             os.path.join(dpath, dataname), datalist,
             shuffle=True, num_tests=num_tests,
@@ -372,7 +373,7 @@ def train_model(
         print("%d valid examples" % num_vals)
         print("%d test examples" % num_tests)
 
-    else:
+    else: # testing only
         assert  num_tests is not None, "Number of tests cannot be None!"
         test = edp.load_data(
             os.path.join(dpath, dataname), datalist,
@@ -387,7 +388,7 @@ def train_model(
         print("%d test examples" % num_tests)
 
 
-    if not escape_train:
+    if not escape_train: # normal training
         print('Training')
 
 
@@ -489,7 +490,8 @@ def train_model(
 
         print( 'Acc: Train ', train_acc, 'Valid ', valid_acc, 'Test ', test_acc )
         print( 'Confusion matrix: Train ', train_conf_mat, 'Valid ', valid_conf_mat, 'Test ', test_conf_mat )
-        print( 'Report: Train ', train_rept, 'Valid ', valid_rept, 'Test ', test_rept)
+        # TODO
+        # print( 'Report: Train ', train_rept, 'Valid ', valid_rept, 'Test ', test_rept)
 
         if save_file:
             # if best params not found
@@ -510,7 +512,7 @@ def train_model(
 
         return train_acc, valid_acc, test_acc
 
-    else:
+    else: # testing only
         test_acc, test_conf_mat = pred_error(f_pred_prob, f_pred_class, test, kf_test)
 
         print( 'Acc: Test ', test_acc )
@@ -536,21 +538,24 @@ def train_model(
 
 if __name__ == '__main__':
     train_model(
-        # dpath = '../feat_constq/',
-        dpath = '~/Downloads/Data/Rita/EyBreath/data/feat_constq/',
-        dataname='ey',
-        datalist='./ey_selected_100',
+        dpath = '../feat_constq/',
+        # dpath = '~/Downloads/Data/Rita/EyBreath/data/feat_constq/',
+        dataname='breath',
+        datalist='./breath_selected_100',
         sample_threshold=100,
-        num_classes=53,
+        num_classes=44,
         # ey: 100:53, 200:22, 300:14, 500:4
         # br: 100:44, 200:20
+
         use_unknown=False,
         unknown_class=None,
+
         use_dct=False,
-        distort=False,
+
+        distort=True,
         sigma=2,
         alpha=15,
-        ds_limit=5,
+        ds_limit=2,
 
         patience=10000,
         time_encoder='lstm',
@@ -558,14 +563,13 @@ if __name__ == '__main__':
         lrate=0.0001,
         gamma=0.9,
         use_dropout=True,
+        validFreq=20000,
 
-        escape_train=True,
-        num_tests=1000,
+        # escape_train=True,
+        # num_tests=1000,
+        escape_train=False,
+        num_tests=None,
 
-        # escape_train=False,
-        # num_tests=None,
-
-        save_file='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz',
-        #reload_model_path=None)
-        # reload_model_path='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.bkp')
-        reload_model_path='./ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.bkp')
+        save_file='../npz/br100_close_et2_f8-3-3_s1-1_p2-1_d06_delta.npz',
+        reload_model_path=None)
+        # reload_model_path='../npz/br100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz')

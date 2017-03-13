@@ -50,7 +50,7 @@ class Instance:
         self.speaker_id = speaker_id
         self.featvec = featvec
 
-def read_instance(data_path, filename,
+def read_instance(data_path, filelist_name,
         num_tests=None,
         use_dct=False,
         use_unknown=False, unknown_class=None,
@@ -59,12 +59,12 @@ def read_instance(data_path, filename,
     Read data as instances.
 
     :data_path: (string) path containing data to be processed
-    :filename: (string) file containing names of interested files
-    :wrt_dict: (bool) write speaker_dict to file or not
+    :filelist_name: (string) file containing list of filenames
+    :num_tests: (int) number of test samples, for sampling test data only
     """
 
     # Read all instances
-    filelist = [l for l in open(filename)] # read in filename
+    filelist = [l for l in open(filelist_name)] # read in filelist_name
     interest_filelist = [l.split()[0] for l in filelist] # files of interest
 
     if num_tests is not None:
@@ -106,13 +106,14 @@ def read_instance(data_path, filename,
     for k in instance_dict:
         instance_collection.append(instance_dict[k])
 
-    print('processed ', filename, ', total ', num_files, ' files')
+    print('processed ', filelist_name, ', total ', num_files, ' files')
 
     # TODO: unknown
 
 def prepare_data(ins_list, idx_list):
     """
     Format data to network required form.
+
     :ins_list: list of instances
     :idx_list: list of indices
     <- [X (list of 4d tensors), y (list of integers)]
@@ -133,18 +134,21 @@ def prepare_data(ins_list, idx_list):
 
     return zip(X, y)
 
-def load_data(dpath, filename, shuffle = False,
+def load_data(dpath, filelist_name, shuffle = False,
         num_tests=None,
         use_unknown=False, unknown_class=None,
         use_dct=False,
         distort=False, sigma=None, alpha=None, ds_limit=5):
     """
     Load data.
+
     <- train_set, val_set, test_set: [X (list of 4d tensors), y (list of integers)]
+    or
+    <- test_set only
     """
     # Read instances from constant Q features
     if num_tests is None: # use all data
-        read_instance(dpath, filename,
+        read_instance(dpath, filelist_name,
                 num_tests=num_tests,
                 use_unknown=use_unknown, unknown_class=unknown_class,
                 use_dct=use_dct,
@@ -194,7 +198,7 @@ def load_data(dpath, filename, shuffle = False,
         return train_set, val_set, test_set
 
     else: # use only test data
-        read_instance(dpath, filename,
+        read_instance(dpath, filelist_name,
                 num_tests=num_tests, use_unknown=use_unknown, unknown_class=unknown_class,
                 use_dct=use_dct,
                 distort=distort, sigma=sigma, alpha=alpha, ds_limit=ds_limit)
@@ -219,6 +223,7 @@ def load_data(dpath, filename, shuffle = False,
 
 if __name__ == '__main__':
     dpath = '../feat_constq'
+
     # train_set, val_set, test_set = load_data(
         # os.path.join(dpath ,'ey'), './ey_selected_100', shuffle = True,
         # num_tests=None,
