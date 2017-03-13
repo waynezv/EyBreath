@@ -14,15 +14,14 @@ import theano.tensor as tensor
 from theano.tensor.nnet import conv2d
 from theano.tensor.signal import pool
 from theano import config
-from theano.sandbox.rng_mrg import MRG_RandomStreams
-from theano.tensor.shared_randomstreams import RandomStreams
+from theano.tensor.shared_randomstreams import RandomStreams # sequence of random numbers
+from theano.sandbox.rng_mrg import MRG_RandomStreams # MRG31k3p random number generator
 
-# Set the random number generator's seed for consistency
-# Set seed for the random numbers
-np.random.seed(1234)
-rds = np.random.RandomState(1234)
-# Generate a theano RandomStreams
-rng = RandomStreams(rds.randint(999999))
+# Set seed for the random numbers for consistency
+seed = 12345
+np.random.seed(seed) # numpy random numbers
+rds = np.random.RandomState(seed) # random generator
+rng = RandomStreams( rds.randint(999999) ) # theano RandomStreams generator
 
 """
 Net related.
@@ -111,6 +110,7 @@ class LSTMBuilder:
 
         if out_idx == 'all':
             self.output = rval[0] # h: (n_tstep, n_samp, embd_size)
+
         elif out_idx == 'last':
             self.output = rval[0][-1] # h: (n_samp, embd_size)
 
@@ -142,7 +142,9 @@ class LSTMBuilder:
     def _slice(self, _x, n, dim):
         if _x.ndim == 3:
             return _x[:, :, n * dim:(n + 1) * dim]
+
         return _x[:, n * dim:(n + 1) * dim]
+
 
 class DenseBuilder:
     """
@@ -162,15 +164,19 @@ class DenseBuilder:
                     ),
                     dtype = config.floatX
                 )
+
             elif rand_scheme == 'standnormal':
                 W_val = np.asarray(
                     np.random.randn(in_dim, out_dim),
                     dtype = config.floatX
                 )
+
             elif rand_scheme == 'orthogonal':
                 pass
+
             elif rand_scheme == 'identity':
                 pass
+
         else:
             W_val = W
 
@@ -180,6 +186,7 @@ class DenseBuilder:
             b_val = np.zeros((out_dim,), dtype = config.floatX)
         else:
             b_val = b
+
         b = T.shared(value = b_val, name = prefix + '_b', borrow = True)
 
         self.input = inp
@@ -213,15 +220,19 @@ class ConvolutionBuilder:
                     ),
                     dtype = config.floatX
                 )
+
             elif rand_scheme == 'standnormal':
                 W_val = np.asarray(
                     np.random.randn(n_filt, n_in_featmap, filt_hgt, filt_wdh),
                     dtype = config.floatX
                 )
+
             elif rand_scheme == 'orthogonal':
                 pass
+
             elif rand_scheme == 'identity':
                 pass
+
         else:
             W_val = W
 
@@ -273,6 +284,7 @@ class PoolBuilder:
 
         self.f = T.function([inp], self.output, name = 'f_' + pool_scheme)
 
+
 class DropoutBuilder:
     def __init__(self, inp, p, iftrain, prefix):
         # With probability p to set activations to 0
@@ -281,6 +293,7 @@ class DropoutBuilder:
         drop = tensor.switch(mask, inp, 0) / (1-p)
         self.output = tensor.switch(iftrain, drop, inp)
         self.f = T.function([inp], self.output, name = 'f_'+prefix)
+
 
 class ReshapeBuilder:
     def __init__(self, inp, prefix, shape=None):
@@ -291,14 +304,17 @@ class ReshapeBuilder:
 
         if shape == None: # flatten by default
             self.output = inp.reshape((1, inp.size))
+
         else:
             new_shape = []
+
             for r in shape:
                 if isinstance(r, (list, tuple)):
-                    rmap = list(map(lambda x:shape_map[x], r))
-                    new_shape.append(reduce(mul, rmap, 1))
+                    rmap = list( map(lambda x:shape_map[x], r) )
+                    new_shape.append( reduce(mul, rmap, 1) )
                 else:
                     new_shape.append(shape_map[r])
+
             self.output  = inp.reshape(tuple(new_shape))
 
         self.f = T.function([inp], self.output, name = 'f_'+prefix)
@@ -311,10 +327,13 @@ class ActivationBuilder:
     def __init__(self, inp, activation):
         if activation == 'relu':
             self.output = tensor.nnet.relu(inp)
+
         elif activation == 'softmax':
             self.output = tensor.nnet.softmax(inp)
+
         elif activation == 'tanh':
             self.output = tensor.nnet.sigmoid(inp)
+
         elif activation == 'sigmoid':
             self.output = tensor.tanh(inp)
 
@@ -332,6 +351,7 @@ def get_cost(pred_prob, y):
         off = 1e-6
 
     cost = -tensor.log(pred_prob[tensor.arange(n_samp), y] + off).mean()
+
     return cost
 
 def pred_class(pred_prob):
@@ -340,6 +360,7 @@ def pred_class(pred_prob):
     # reasons unknown
     if (pred_prob.ndim == 2):
         return np.argmax(pred_prob, axis=1)
+
     return np.argmax(pred_prob)
 
 """
@@ -521,6 +542,6 @@ def rmsprop(params, grads, x, y, cost,
 
 # TODO:
 # 0. Adam
-# Adagrad
-# 1. Momentum
-# 2. NAG
+# 1. Adagrad
+# 2. Momentum
+# 3. NAG

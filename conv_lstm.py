@@ -31,14 +31,18 @@ model = OrderedDict() # dict: layer_name (string) -> layer (func)
 
 def get_layer(layer_name):
     l = model[layer_name]
+
     return l
 
-def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
+def build_model(params, num_classes, dropout=False, time_encoder='lstm'):
     """
+    Build CNN-LSTM model.
+
     :params: list of params, empty or reloaded from saved model
     """
 
     print('Using encoder: ', time_encoder)
+
     if params: # not empty
         if time_encoder == 'lstm':
             W_embd  = params[0]
@@ -58,7 +62,8 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
             b_dense = params[5]
 
         print('Params from previously saved model loaded successfully!')
-    else:
+
+    else: # init params
             W_embd  = None
             b_embd  = None
             W_conv  = None
@@ -76,8 +81,10 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
 
     x = tensor.tensor4('x', dtype=config.floatX)
     y = tensor.scalar('y', dtype='int32')
+
     n_samp, n_ch, n_row, n_col = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
-    iftrain = T.shared(np.asarray(0, dtype=config.floatX))
+
+    iftrain = T.shared(np.asarray(0, dtype=config.floatX)) # used in inverted dropout
 
     embd = ConvolutionBuilder(x, (5, 1, 3, 3), prefix = 'embd',
                               stride=(1,1),
@@ -87,6 +94,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
     if time_encoder == 'lstm':
         pooled = PoolBuilder(embd_a.output, 'max', ds=(2,1))
         reshaped = ReshapeBuilder(pooled.output, prefix='reshape', shape=(3,0,(1,2)))
+
         lstm = LSTMBuilder(reshaped.output, 1150, prefix = 'lstm',
                            W=W_lstm, U=U_lstm, b=b_lstm,
                            out_idx='last', rand_scheme = 'orthogonal')
@@ -94,6 +102,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
             dropped = DropoutBuilder(lstm.output, 0.5, iftrain, 'dropout')
             dense = DenseBuilder(dropped.output, 1150, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
+
         else:
             dense = DenseBuilder(lstm2.output, 920, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
@@ -165,6 +174,7 @@ def build_model(params, num_classes, dropout=True, time_encoder='lstm'):
                 'lstm': lstm,
                 'dense': dense
                 }
+
     elif time_encoder == 'tdnn':
         model = {
                 'embd': embd,
@@ -185,6 +195,7 @@ def get_minibatches_idx(num_samples, batch_size, shuffle = False):
     mini_batches = [ samp_idx_list[i * batch_size :
                                    (i + 1) * batch_size]
                     for i in range(num_batches) ]
+
     leftover = num_batches * batch_size
     if (leftover != num_samples):
         mini_batches.append(samp_idx_list[leftover :])
@@ -193,7 +204,8 @@ def get_minibatches_idx(num_samples, batch_size, shuffle = False):
 
 def pred_error(f_pred_prob, f_pred_class, data, iterator, verbose=False):
     """
-    Compute the error.
+    Compute prediction error.
+
     :f_pred_class: Theano function computing the prediction
             :x (tensor4)
             <- class (int32)
@@ -231,6 +243,7 @@ def pred_error(f_pred_prob, f_pred_class, data, iterator, verbose=False):
 def pack_params(params_list):
     """
     Pack the parameters for saving.
+
     :params_list: a list of theano shared variables
     """
     params = OrderedDict()
@@ -242,6 +255,7 @@ def pack_params(params_list):
 def load_params(model_path):
     """
     Load params from saved model.
+
     :model_path: (string) path saving the model params
     <- list of params
     """
@@ -267,7 +281,7 @@ def plot_confusion_matrix(cm, classes,
                           normalize=False, title='Confusion matrix',
                           cmap=plt.cm.Blues):
     """
-    This function prints and plots the confusion matrix.
+    Prints and plots the confusion matrix.
     Normalization can be applied by setting `normalize=True`.
     """
 
@@ -313,10 +327,10 @@ def train_model(
     patience=100,  # Number of epoch to wait before early stop if no progress
     max_epochs=10000,  # The maximum number of epoch to run
     dispFreq=100,  # Display to stdout the training progress every N updates
-    time_encoder='lstm',
+    time_encoder='lstm', # lstm or tdnn
     optimizer=rmsprop,  # sgd, adadelta and rmsprop available, sgd very hard to use, not recommanded (probably need momentum and decaying learning rate).
     lrate=0.0001,  # Learning rate for sgd (not used for adadelta and rmsprop)
-    gamma=0.9,
+    gamma=0.9, # for adaxxx
     validFreq=5000,  # Compute the validation error after this number of update.
     batch_size=1,  # The batch size during training.
     valid_batch_size=1,  # The batch size used for validation/test set.
@@ -338,6 +352,7 @@ def train_model(
         print('loading model ...')
         params = load_params(reload_model_path)
         print('Done.')
+
     else: # init params
         params = []
 
@@ -399,10 +414,11 @@ def train_model(
 
         history_errs = []
         best_p = None # best set of params
-        bad_counter = 0
-        uidx = 0  # the number of update done
+        bad_counter = 0 # count non-decreasing trains
+        uidx = 0  # the number of updates done
         estop = False  # early stop
         start_time = time.time()
+
         try:
             for eidx in range(max_epochs):
                 n_samples = 0
@@ -415,10 +431,10 @@ def train_model(
                     iftrain.set_value(1.)
 
                     # Select the random examples for this minibatch
-                    #x, y = [train[t] for t in train_index]
                     x, y = train[train_index[0]]
                     n_samples += batch_size
 
+                    # Update params and grads
                     cost = f_grad_shared(x, y)
                     f_update()
 
@@ -426,9 +442,11 @@ def train_model(
                         print('bad cost detected: ', cost)
                         return 1., 1., 1.
 
+                    # Display
                     if np.mod(uidx, dispFreq) == 0:
                         print('Epoch ', eidx, 'Update ', uidx, 'Cost ', cost)
 
+                    # Save
                     if save_file and np.mod(uidx, saveFreq) == 0:
                         print('Saving model...')
                         if best_p is None:
@@ -440,6 +458,7 @@ def train_model(
                         #            open('%s.pkl' % save_file, 'wb'), -1)
                         print('Done.')
 
+                    # Validation
                     if np.mod(uidx, validFreq) == 0:
                         iftrain.set_value(0.)
 

@@ -24,7 +24,7 @@ class Instance:
 
 def write_dict(speaker_dict, filename):
     """
-    Save speaker name : speaker id pairs.
+    Save [speaker name(str) : speaker id(int)] pairs.
     """
     out = ''
     for k in speaker_dict:
@@ -46,7 +46,7 @@ def write_data_list(filename, data_list):
 
 def select_data(data_path, filename, spk_smpl_thrd = 100, write_dict=False):
     """
-    Select speakers and instances.
+    Select speakers and instances that exceeds threshold.
     """
 
     # Read all instances
@@ -83,7 +83,7 @@ def select_data(data_path, filename, spk_smpl_thrd = 100, write_dict=False):
     data_list = [] # list of enrolled files
     unknown_list = [] # list of out-of-set files
 
-    sid = 0
+    sid = 0 # speaker id
     for k in count_dict: # for each speaker
         if count_dict[k] >= spk_smpl_thrd: # if exceeds threshold
             ins_list = instance_dict[k]
@@ -109,12 +109,14 @@ def select_data(data_path, filename, spk_smpl_thrd = 100, write_dict=False):
 
     write_data_list(sel_name, data_list)
     write_data_list(unk_name, unknown_list)
+
     print('Saved selected filelist to ', sel_name)
     print('Saved out-of-set filelist to ', unk_name)
 
     if wrt_dict:
-        write_dict(speaker_dict, ''.join([filename, '_consq_speaker_dict.txt']))
-        print('Saved speaker_dict to file: ', filename + '_consq_speaker_dict.txt')
+        dict_name = ''.join([filename, '_consq_speaker_dict.txt'])
+        write_dict(speaker_dict, dict_name)
+        print('Saved speaker_dict to file: ', dict_name)
 
 
 if __name__ == '__main__':

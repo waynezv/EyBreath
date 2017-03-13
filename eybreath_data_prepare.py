@@ -60,16 +60,23 @@ def read_instance(data_path, filename,
 
     :data_path: (string) path containing data to be processed
     :filename: (string) file containing names of interested files
-    :wrt_dict: (bool) write speaker_dict to file or not
+    :num_tests: (int) number of test samples
+    :use_dct: (bool)
+    :use_unknown: (bool)
+    :unknown_class: (int)
+    :distort: (bool)
+    :sigma, alpha: (float) elastic transform parameters
+    :ds_limit: (int) number of distorsion
     """
 
     # Read all instances
-    filelist = [l for l in open(filename)] # read in filename
-    interest_filelist = [l.split()[0] for l in filelist] # files of interest
+    filelist = [l for l in open(filename)]
+    interest_filelist = [l.split()[0] for l in filelist]
 
     if num_tests is not None:
         num_files = num_tests
         read_list = np.random.permutation(len(interest_filelist))[:num_files]
+
     else:
         num_files = len(interest_filelist)
         read_list = range(num_files)
@@ -89,12 +96,12 @@ def read_instance(data_path, filename,
             instance_dict[sspk_id] = [] # init speaker instance list
 
         if distort:
-            rds = np.random.RandomState(1234)
+            rds = np.random.RandomState(12345)
             for _ in xrange(ds_limit):
                 featvec = elastic_transform(featvec, alpha, sigma, random_state=rds)
                 instance_dict[sspk_id].append( Instance(file, speaker_id, featvec) )
 
-        elif dct:
+        elif dct: # deprecated
             coeff = dct(dct(featvec, axis=0, norm='ortho'), axis=1, norm='ortho')
             coeff[0:15, 0:15] = 0.
             featvec = idct(idct(coeff, axis=1), axis=0)
@@ -113,6 +120,7 @@ def read_instance(data_path, filename,
 def prepare_data(ins_list, idx_list):
     """
     Format data to network required form.
+
     :ins_list: list of instances
     :idx_list: list of indices
     <- [X (list of 4d tensors), y (list of integers)]
@@ -120,6 +128,7 @@ def prepare_data(ins_list, idx_list):
 
     X = []
     y = []
+
     for idx in idx_list:
         ins = ins_list[idx]
         spk_id = ins.speaker_id
@@ -140,6 +149,7 @@ def load_data(dpath, filename, shuffle = False,
         distort=False, sigma=None, alpha=None, ds_limit=5):
     """
     Load data.
+
     <- train_set, val_set, test_set: [X (list of 4d tensors), y (list of integers)]
     """
     # Read instances from constant Q features
@@ -158,6 +168,7 @@ def load_data(dpath, filename, shuffle = False,
 
         for i in xrange(len(instance_dict)):
             ins_list = instance_collection[i]
+
             num_ins = len(ins_list)
             num_trns = int(np.floor(num_ins * split_ratio[0]))
             num_vals = int(np.floor(num_ins * split_ratio[1]))
@@ -187,6 +198,7 @@ def load_data(dpath, filename, shuffle = False,
             tlf = np.random.permutation(len(train_set))
             vlf = np.random.permutation(len(val_set))
             dlf = np.random.permutation(len(test_set))
+
             train_set = [train_set[s] for s in tlf]
             val_set = [val_set[s] for s in vlf]
             test_set = [test_set[s] for s in dlf]
@@ -212,7 +224,8 @@ def load_data(dpath, filename, shuffle = False,
             xy_ = prepare_data(ins_list, smpl_list)
 
             for x, y in xy_:
-                test_set.append((x, y))
+                test_set.append((x, y)) # caveat: if use generator may cause error:
+                                    # test_set.append((x,y) for x,y in xy_)
 
         return test_set
 
