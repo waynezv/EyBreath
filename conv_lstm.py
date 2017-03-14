@@ -85,7 +85,7 @@ def build_model(params, num_classes, dropout=False, time_encoder='lstm'):
 
     iftrain = T.shared(np.asarray(0, dtype=config.floatX)) # used in inverted dropout
 
-    embd = ConvolutionBuilder(x, (5, 1, 3, 3), prefix = 'embd',
+    embd = ConvolutionBuilder(x, (8, 1, 3, 3), prefix = 'embd',
                               stride=(1,1),
                               W=W_embd, b=b_embd, rand_scheme='standnormal')
     embd_a = ActivationBuilder(embd.output, 'relu')
@@ -95,12 +95,12 @@ def build_model(params, num_classes, dropout=False, time_encoder='lstm'):
         reshaped = ReshapeBuilder(pooled.output, prefix='reshape', shape=(3,0,(1,2)))
 
         # ey 1150, br 1840
-        lstm = LSTMBuilder(reshaped.output, 1150, prefix = 'lstm',
+        lstm = LSTMBuilder(reshaped.output, 1840, prefix = 'lstm',
                            W=W_lstm, U=U_lstm, b=b_lstm,
                            out_idx='last', rand_scheme = 'orthogonal')
         if dropout:
-            dropped = DropoutBuilder(lstm.output, 0.5, iftrain, 'dropout')
-            dense = DenseBuilder(dropped.output, 1150, num_classes, prefix = 'dense',
+            dropped = DropoutBuilder(lstm.output, 0.4, iftrain, 'dropout')
+            dense = DenseBuilder(dropped.output, 1840, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
 
         else:
@@ -509,10 +509,10 @@ if __name__ == '__main__':
     train_model(
         dpath = '../feat_constq/',
         # dpath = '~/Downloads/Data/Rita/EyBreath/data/feat_constq/',
-        dataname='ey',
-        datalist='./ey_selected_100',
+        dataname='breath',
+        datalist='./breath_selected_100',
         sample_threshold=100,
-        num_classes=53,
+        num_classes=44,
         # ey: 100:53, 200:22, 300:14, 500:4
         # br: 100:44, 200:20
 
@@ -520,11 +520,6 @@ if __name__ == '__main__':
         unknown_class=None,
 
         use_dct=False,
-
-        distort=True,
-        sigma=2,
-        alpha=15,
-        ds_limit=2,
 
         time_encoder='lstm',
         optimizer=adadelta,
@@ -541,8 +536,13 @@ if __name__ == '__main__':
         weight_decay=False,
         use_dropout=True,
 
+        distort=True,
+        sigma=2,
+        alpha=15,
+        ds_limit=2,
+
         escape_train=True,
-        num_tests=10000,
+        num_tests=2000,
         # escape_train=False,
         # num_tests=None,
 
@@ -550,7 +550,7 @@ if __name__ == '__main__':
         # save_file='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.bkp',
         # reload_model_path='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.bkp')
 
-        save_file='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.bkp',
-        reload_model_path='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.bkp')
+        save_file='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.3.T-2000',
+        reload_model_path='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.3')
 
         # reload_model_path=None)
