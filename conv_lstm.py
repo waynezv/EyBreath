@@ -539,7 +539,7 @@ if __name__ == '__main__':
         distort=True,
         sigma=2,
         alpha=15,
-        ds_limit=2,
+        ds_limit=5,
 
         escape_train=True,
         num_tests=2000,
