@@ -24,7 +24,7 @@ from w_net import LSTMBuilder, ConvolutionBuilder, DenseBuilder,\
     get_cost, pred_class,\
     sgd, rmsprop, adadelta
 
-DEBUG_OUTPUT = 0
+DEBUG_OUTPUT = 1
 
 model = OrderedDict() # dict: layer_name (string) -> layer (func)
 
@@ -33,7 +33,7 @@ def get_layer(layer_name):
 
     return l
 
-def build_model(params, num_classes, dropout=False, time_encoder='lstm'):
+def build_model(params, num_classes, dropout=False, dropout_rate=None, time_encoder='lstm'):
     """
     Build CNN-LSTM model.
 
@@ -85,7 +85,7 @@ def build_model(params, num_classes, dropout=False, time_encoder='lstm'):
 
     iftrain = T.shared(np.asarray(0, dtype=config.floatX)) # used in inverted dropout
 
-    embd = ConvolutionBuilder(x, (8, 1, 3, 3), prefix = 'embd',
+    embd = ConvolutionBuilder(x, (5, 1, 3, 3), prefix = 'embd',
                               stride=(1,1),
                               W=W_embd, b=b_embd, rand_scheme='standnormal')
     embd_a = ActivationBuilder(embd.output, 'relu')
@@ -95,12 +95,12 @@ def build_model(params, num_classes, dropout=False, time_encoder='lstm'):
         reshaped = ReshapeBuilder(pooled.output, prefix='reshape', shape=(3,0,(1,2)))
 
         # ey 1150, br 1840
-        lstm = LSTMBuilder(reshaped.output, 1840, prefix = 'lstm',
+        lstm = LSTMBuilder(reshaped.output, 1150, prefix = 'lstm',
                            W=W_lstm, U=U_lstm, b=b_lstm,
                            out_idx='last', rand_scheme = 'orthogonal')
         if dropout:
-            dropped = DropoutBuilder(lstm.output, 0.4, iftrain, 'dropout')
-            dense = DenseBuilder(dropped.output, 1840, num_classes, prefix = 'dense',
+            dropped = DropoutBuilder(lstm.output, dropout_rate, iftrain, 'dropout')
+            dense = DenseBuilder(dropped.output, 1150, num_classes, prefix = 'dense',
                     W=W_dense, b=b_dense, rand_scheme='standnormal')
 
         else:
@@ -121,25 +121,25 @@ def build_model(params, num_classes, dropout=False, time_encoder='lstm'):
     cost = get_cost(dense_a.output, y)
     pred = dense_a.output.argmax()
 
-    # if DEBUG_OUTPUT:
-    tx = np.zeros((1,1,463,20), dtype = 'float32')
-    f1 = T.function([x], embd_a.output)
-    print('1. embd out: ', f1(tx).shape)
+    if DEBUG_OUTPUT:
+        tx = np.zeros((1,1,463,20), dtype = 'float32')
+        f1 = T.function([x], embd_a.output)
+        print('1. embd out: ', f1(tx).shape)
 
-    f1_ = T.function([x], pooled.output)
-    print('2. pool out: ', f1_(tx).shape)
-    f2 = T.function([x], reshaped.output)
-    print('3. reshape out: ', f2(tx).shape)
-    f3 = T.function([x], lstm.output)
-    print('4. lstm out:', f3(tx).shape)
-    f4 = T.function([x], dropped.output)
-    print('5. dropped out:', f4(tx).shape)
-    f5 = T.function([x], dense.output)
-    print('6. dense out: ', f5(tx).shape)
-    f7 = T.function([x, y], cost)
-    print('7. cost out: ', f7(tx, 0))
-    f8 = T.function([x], pred)
-    print('8. pred out: ', f8(tx))
+        f1_ = T.function([x], pooled.output)
+        print('2. pool out: ', f1_(tx).shape)
+        f2 = T.function([x], reshaped.output)
+        print('3. reshape out: ', f2(tx).shape)
+        f3 = T.function([x], lstm.output)
+        print('4. lstm out:', f3(tx).shape)
+        f4 = T.function([x], dropped.output)
+        print('5. dropped out:', f4(tx).shape)
+        f5 = T.function([x], dense.output)
+        print('6. dense out: ', f5(tx).shape)
+        f7 = T.function([x, y], cost)
+        print('7. cost out: ', f7(tx, 0))
+        f8 = T.function([x], pred)
+        print('8. pred out: ', f8(tx))
 
     f_pred_prob = T.function([x], dense_a.output, name='f_pred_prob')
     f_cost = T.function([x, y], cost, name='f_cost')
@@ -301,6 +301,7 @@ def train_model(
 
     weight_decay=False,
     use_dropout=True,
+    dropout_rate=0.2,
 
     escape_train=False,
     num_tests=None,
@@ -322,7 +323,7 @@ def train_model(
         params = []
 
     (x, y, f_pred_prob, _, f_pred_class, cost, params, grads, model, iftrain) = build_model(
-        params, num_classes, dropout=use_dropout, time_encoder=time_encoder)
+        params, num_classes, dropout=use_dropout, dropout_rate=dropout_rate, time_encoder=time_encoder)
 
     # TODO:
     if weight_decay:
@@ -509,10 +510,10 @@ if __name__ == '__main__':
     train_model(
         dpath = '../feat_constq/',
         # dpath = '~/Downloads/Data/Rita/EyBreath/data/feat_constq/',
-        dataname='breath',
-        datalist='./breath_selected_100',
+        dataname='ey',
+        datalist='./ey_selected_100',
         sample_threshold=100,
-        num_classes=44,
+        num_classes=53,
         # ey: 100:53, 200:22, 300:14, 500:4
         # br: 100:44, 200:20
 
@@ -535,6 +536,7 @@ if __name__ == '__main__':
 
         weight_decay=False,
         use_dropout=True,
+        dropout_rate=0.5,
 
         distort=True,
         sigma=2,
@@ -547,10 +549,10 @@ if __name__ == '__main__':
         # num_tests=None,
 
         saveFreq=2000,
-        # save_file='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.bkp',
-        # reload_model_path='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.bkp')
+        save_file='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.1.T-2000',
+        reload_model_path='../npz/ey100_closeset_dstt_lstm_f5-3-3_s1-1_p2-1_d05_delta.npz.1')
 
-        save_file='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.3.T-2000',
-        reload_model_path='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.3')
+        # save_file='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.3.T-2000',
+        # reload_model_path='../npz/br100_close_dstt_f8-3-3_s1-1_p2-1_d04_delta.npz.3')
 
         # reload_model_path=None)
