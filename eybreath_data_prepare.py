@@ -174,36 +174,36 @@ def load_data(dpath, filelist_name, shuffle = False,
             num_ins = len(ins_list)
             num_trns = int(np.floor(num_ins * split_ratio[0]))
             num_vals = int(np.floor(num_ins * split_ratio[1]))
-            num_devs = int(num_ins - num_trns - num_vals)
+            num_tes = int(num_ins - num_trns - num_vals)
 
             smpl_list = np.arange(num_ins)
 
-            if shuffle:
+            if shuffle: # within speaker shuffle
                 np.random.shuffle(smpl_list)
 
             trn_list = smpl_list[: num_trns]
             val_list = smpl_list[num_trns : num_trns + num_vals]
-            dev_list = smpl_list[num_trns + num_vals : num_ins]
+            tes_list = smpl_list[num_trns + num_vals : num_ins]
 
             xy_trn = prepare_data(ins_list, trn_list)
             xy_val = prepare_data(ins_list, val_list)
-            xy_dev = prepare_data(ins_list, dev_list)
+            xy_tes = prepare_data(ins_list, tes_list)
 
             for x, y in xy_trn:
                 train_set.append((x, y))
             for x, y in xy_val:
                 val_set.append((x, y))
-            for x, y in xy_dev:
+            for x, y in xy_tes:
                 test_set.append((x, y))
 
-        if shuffle:
-            tlf = np.random.permutation(len(train_set))
+        if shuffle: # among speaker / global shuffle
+            trf = np.random.permutation(len(train_set))
             vlf = np.random.permutation(len(val_set))
-            dlf = np.random.permutation(len(test_set))
+            tef = np.random.permutation(len(test_set))
 
-            train_set = [train_set[s] for s in tlf]
+            train_set = [train_set[s] for s in trf]
             val_set = [val_set[s] for s in vlf]
-            test_set = [test_set[s] for s in dlf]
+            test_set = [test_set[s] for s in tef]
 
         return train_set, val_set, test_set
 
@@ -228,6 +228,9 @@ def load_data(dpath, filelist_name, shuffle = False,
             for x, y in xy_:
                 test_set.append((x, y)) # caveat: if use generator may cause error:
                                     # test_set.append((x,y) for x,y in xy_)
+        if shuffle:
+            tef = np.random.permutation(len(test_set))
+            test_set = [test_set[s] for s in tef]
 
         return test_set
 
